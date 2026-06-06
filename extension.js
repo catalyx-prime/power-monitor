@@ -32,6 +32,10 @@ const METRICS = {
 };
 
 const HISTORY_MAX = 1440; // 4 hrs at 10 s intervals
+// How often the in-memory average accumulators are flushed to GSettings. The
+// keys exist only so the separate prefs process can read the averages, so a few
+// seconds of lag there is fine and avoids a dconf write on every poll tick.
+const ACCUM_FLUSH_MS = 30 * 1000;
 const CHART_HEIGHT = 160;
 const CHART_RANGES = [
     {label: '15 min', ms: 15 * 60 * 1000},
@@ -112,12 +116,26 @@ function batteryWatts(name) {
 //   - Discharging -> the battery is powering the system (discharge)
 //   - Charging    -> energy is flowing into the battery (charge)
 // Full / Not charging / Unknown read as zero for both.
+// The battery device name is discovered once and cached. sysfs does not rename
+// a battery under a running kernel, so re-enumerating /sys/class/power_supply on
+// every poll is wasted I/O. If the cached node ever disappears (a read returns
+// null), we re-scan once and retry.
+let _batteryName = null;
+
 function readMetrics() {
-    const name = findBattery();
+    let name = _batteryName ?? (_batteryName = findBattery());
     if (name === null)
         return null;
 
-    const status = readText(`${POWER_SUPPLY_PATH}/${name}/status`) || 'Unknown';
+    let status = readText(`${POWER_SUPPLY_PATH}/${name}/status`);
+    if (status === null) {
+        // Cached device vanished (removed/renamed) — re-scan once and retry.
+        name = _batteryName = findBattery();
+        if (name === null)
+            return null;
+        status = readText(`${POWER_SUPPLY_PATH}/${name}/status`);
+    }
+    status = status || 'Unknown';
     const onBattery = status === 'Discharging';
 
     let watts = batteryWatts(name);
@@ -159,6 +177,15 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
         // Rolling history buffer for the chart (in-memory, no file I/O).
         this._history = [];
+
+        // Average accumulators are batched in memory and flushed to GSettings
+        // periodically rather than on every tick (see _flushAccumulators). These
+        // hold only the unflushed delta since the last flush.
+        this._pending = {
+            discharge: {sum: 0, count: 0},
+            charge: {sum: 0, count: 0},
+        };
+        this._lastFlush = Date.now();
         this._chartRange = 60 * 60 * 1000; // default: 1 hr
         this._lastMetrics = null;
         this._repaintId = null;
@@ -201,6 +228,8 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         }
 
         this.connect('destroy', () => {
+            // Persist any unflushed average samples before tearing down.
+            this._flushAccumulators();
             for (const id of this._panelChangedIds)
                 this._settings.disconnect(id);
             this._panelChangedIds = [];
@@ -607,21 +636,47 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         for (const key of ['discharge', 'charge']) {
             this._settings.set_double(`${key}-sum`, 0.0);
             this._settings.set_int(`${key}-count`, 0);
+            this._pending[key].sum = 0;
+            this._pending[key].count = 0;
         }
     }
 
+    // Accumulate into the in-memory delta only. The delta is folded into the
+    // GSettings totals later by _flushAccumulators (every ACCUM_FLUSH_MS), which
+    // keeps dconf writes off the hot poll path.
     _accumulate(key, value) {
-        const sum = this._settings.get_double(`${key}-sum`) + value;
-        const count = this._settings.get_int(`${key}-count`) + 1;
-        this._settings.set_double(`${key}-sum`, sum);
-        this._settings.set_int(`${key}-count`, count);
+        this._pending[key].sum += value;
+        this._pending[key].count += 1;
     }
 
+    // Fold the in-memory deltas into the GSettings running totals. Uses
+    // read-modify-write so an external reset (the prefs Reset button zeroing the
+    // keys in another process) is respected: we only ever add our unflushed
+    // delta onto whatever base GSettings currently holds.
+    _flushAccumulators() {
+        for (const key of ['discharge', 'charge']) {
+            const pending = this._pending[key];
+            if (pending.count === 0)
+                continue;
+            const sum = this._settings.get_double(`${key}-sum`) + pending.sum;
+            const count = this._settings.get_int(`${key}-count`) + pending.count;
+            this._settings.set_double(`${key}-sum`, sum);
+            this._settings.set_int(`${key}-count`, count);
+            pending.sum = 0;
+            pending.count = 0;
+        }
+        this._lastFlush = Date.now();
+    }
+
+    // Average over the GSettings total plus the not-yet-flushed in-memory delta,
+    // so the panel display stays exact between flushes (the prefs process, which
+    // only sees GSettings, lags by at most ACCUM_FLUSH_MS).
     _average(key) {
-        const count = this._settings.get_int(`${key}-count`);
+        const count = this._settings.get_int(`${key}-count`) + this._pending[key].count;
         if (count <= 0)
             return null;
-        return this._settings.get_double(`${key}-sum`) / count;
+        const sum = this._settings.get_double(`${key}-sum`) + this._pending[key].sum;
+        return sum / count;
     }
 
     /* ------------------------------ refresh ------------------------------ */
@@ -640,6 +695,8 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
         this._accumulate('discharge', metrics.discharge);
         this._accumulate('charge', metrics.charge);
+        if (Date.now() - this._lastFlush >= ACCUM_FLUSH_MS)
+            this._flushAccumulators();
 
         // Surface the metric that matches the plug state: discharge while the
         // laptop is unplugged, charge while it is plugged in. This holds even

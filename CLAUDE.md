@@ -48,11 +48,22 @@ for syntax, then exercise the real shell after a re-login.
 - **Two execution contexts.** Anything in `extension.js` runs inside gnome-shell
   (St/Clutter/Main available). `prefs.js` runs in its own process — only Gtk/Adw/Gio
   and `getSettings()`. Don't import shell-only modules into prefs, or vice versa.
-- **All state lives in GSettings**, not in JS fields. The accumulator keys
+- **GSettings is the cross-process source of truth.** The accumulator keys
   (`discharge-sum`/`discharge-count`, `charge-sum`/`charge-count`),
-  `boot-id`, and `refresh-interval` are the source of truth, which is how the panel
-  and the prefs window stay in sync (prefs subscribes via `changed::` signals).
-  The two metric ids (`discharge`, `charge`) map straight onto the `<id>-*` keys.
+  `boot-id`, and `refresh-interval` are how the panel and the prefs window stay in
+  sync (prefs subscribes via `changed::` signals). The two metric ids
+  (`discharge`, `charge`) map straight onto the `<id>-*` keys.
+- **Average samples are batched, not written every tick.** To keep a dconf write
+  off the poll hot path, `_accumulate()` only updates an in-memory delta
+  (`_pending`); `_flushAccumulators()` folds it into the GSettings totals every
+  `ACCUM_FLUSH_MS` (and on teardown). The flush is read-modify-write so an external
+  reset (the prefs Reset button zeroing the keys) is respected — we only ever add
+  the unflushed delta onto whatever base GSettings holds. `_average()` adds the
+  pending delta on top of the stored total so the panel stays exact between
+  flushes; the prefs window (GSettings only) lags by at most `ACCUM_FLUSH_MS`.
+- **The battery device name is cached** (`_batteryName` in `readMetrics`) so the
+  poll loop doesn't re-enumerate `/sys/class/power_supply` every tick; it re-scans
+  only if the cached node's `status` read returns null (device removed/renamed).
 - **Averages reset on reboot**, detected by comparing the stored `boot-id` against
   `/proc/sys/kernel/random/boot_id` in `checkBoot()`.
 - **Direction comes from the battery `status` field, not the sign of `current_now`**
