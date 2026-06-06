@@ -1,9 +1,9 @@
 {
   "uuid": "power-monitor@local",
   "name": "Power Monitor",
-  "description": "Displays real-time battery discharge and charge power metrics in the system status bar, with rolling averages and a configurable refresh interval.",
+  "description": "Shows live battery power draw — in watts — directly in the top bar. Tracks discharge while on battery and charge rate while plugged in, switching automatically between the two. Rolling averages since last boot give you a sense of typical consumption over time. Configurable refresh interval, optional icon, and panel placement.",
   "shell-version": ["45", "46", "47", "48", "49", "50"],
   "settings-schema": "org.gnome.shell.extensions.power-monitor",
-  "url": "https://example.com/power-monitor",
+  "url": "https://github.com/catalyx-prime/power-monitor",
   "version": 2
 }
