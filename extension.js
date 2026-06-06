@@ -6,6 +6,8 @@ import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import UPowerGlib from 'gi://UPowerGlib';
+import Pango from 'gi://Pango';
+import PangoCairo from 'gi://PangoCairo';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -28,6 +30,14 @@ const METRICS = {
     discharge: {icon: ICON_FILES.discharge, label: 'Discharge'},
     charge: {icon: ICON_FILES.charge, label: 'Charge'},
 };
+
+const HISTORY_MAX = 1440; // 4 hrs at 10 s intervals
+const CHART_HEIGHT = 160;
+const CHART_RANGES = [
+    {label: '15 min', ms: 15 * 60 * 1000},
+    {label: '1 hr',   ms: 60 * 60 * 1000},
+    {label: '4 hr',   ms: 4 * 60 * 60 * 1000},
+];
 
 /* ----------------------------- sysfs helpers ----------------------------- */
 
@@ -147,6 +157,13 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this._extension = extension;
         this._settings = extension.getSettings();
 
+        // Rolling history buffer for the chart (in-memory, no file I/O).
+        this._history = [];
+        this._chartRange = 60 * 60 * 1000; // default: 1 hr
+        this._lastMetrics = null;
+        this._repaintId = null;
+        this._menuOpenId = null;
+
         try {
             this._ifaceSettings = new Gio.Settings({schema: 'org.gnome.desktop.interface'});
         } catch (_e) {
@@ -190,6 +207,14 @@ class PowerMonitorIndicator extends PanelMenu.Button {
                 this._ifaceColorId = null;
             }
             this._ifaceSettings = null;
+            if (this._menuOpenId) {
+                this.menu.disconnect(this._menuOpenId);
+                this._menuOpenId = null;
+            }
+            if (this._repaintId && this._chartArea) {
+                this._chartArea.disconnect(this._repaintId);
+                this._repaintId = null;
+            }
         });
     }
 
@@ -261,14 +286,6 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     }
 
     _updateDetailIcons() {
-        const update = (icon, key) => {
-            if (icon)
-                icon.gicon = this._gicon(this._iconFileFor(key));
-        };
-        update(this._dischargeIcon, 'discharge');
-        update(this._chargeIcon, 'charge');
-        update(this._avgDischargeIcon, 'discharge');
-        update(this._avgChargeIcon, 'charge');
         if (this._panelIcon)
             this._panelIcon.gicon = this._gicon(this._iconFileFor(this._lastActiveKey ?? 'discharge'));
     }
@@ -293,21 +310,7 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     }
 
     _buildMenu() {
-        this._addHeader('Current:');
-        ({label: this._dischargeItem, icon: this._dischargeIcon} =
-            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
-        ({label: this._chargeItem, icon: this._chargeIcon} =
-            this._buildDetailItem(this._iconFileFor('charge'), 'Charge: –'));
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        this._addHeader('Averages:');
-        ({label: this._avgDischargeItem, icon: this._avgDischargeIcon} =
-            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
-        ({label: this._avgChargeItem, icon: this._avgChargeIcon} =
-            this._buildDetailItem(this._iconFileFor('charge'), 'Charge: –'));
-
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._buildChartSection();
 
         const resetItem = new PopupMenu.PopupMenuItem('Reset Averages');
         resetItem.label.add_style_class_name('power-monitor-detail-label');
@@ -320,31 +323,272 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(prefsItem);
     }
 
-    // A non-reactive section header (e.g. "Current:", "Averages:").
-    _addHeader(text) {
-        const item = new PopupMenu.PopupMenuItem(text, {reactive: false});
-        item.label.add_style_class_name('power-monitor-detail-header');
-        this.menu.addMenuItem(item);
+    /* -------------------------- chart section ---------------------------- */
+
+    _buildChartSection() {
+        const outerItem = new PopupMenu.PopupBaseMenuItem({
+            reactive: false,
+            style_class: 'power-monitor-chart-item',
+        });
+
+        const vbox = new St.BoxLayout({
+            vertical: true,
+            style_class: 'power-monitor-chart-box',
+            x_expand: true,
+        });
+        outerItem.add_child(vbox);
+
+        // Range toggle buttons
+        const rangeBox = new St.BoxLayout({
+            style_class: 'power-monitor-range-box',
+            x_align: Clutter.ActorAlign.CENTER,
+        });
+        this._rangeBtns = [];
+        for (const {label, ms} of CHART_RANGES) {
+            const btn = new St.Button({
+                label,
+                style_class: 'power-monitor-range-btn',
+                can_focus: true,
+            });
+            btn._rangeMs = ms;
+            btn.connect('clicked', () => {
+                this._chartRange = ms;
+                this._updateRangeBtnStyles();
+                if (this._chartArea)
+                    this._chartArea.queue_repaint();
+            });
+            this._rangeBtns.push(btn);
+            rangeBox.add_child(btn);
+        }
+        vbox.add_child(rangeBox);
+
+        // Chart canvas
+        this._chartArea = new St.DrawingArea({
+            height: CHART_HEIGHT,
+            x_expand: true,
+            style_class: 'power-monitor-chart-area',
+        });
+        this._repaintId = this._chartArea.connect('repaint', area => this._drawChart(area));
+        vbox.add_child(this._chartArea);
+
+        // 2×2 data summary below the chart
+        const dataRow = new St.BoxLayout({
+            x_expand: true,
+            style_class: 'power-monitor-data-row',
+        });
+        const leftCol = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+            style_class: 'power-monitor-data-col',
+        });
+        const rightCol = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+            style_class: 'power-monitor-data-col',
+        });
+
+        const makeLabel = text => new St.Label({
+            text,
+            style_class: 'power-monitor-grid-label',
+            x_expand: true,
+        });
+
+        this._gridDischarge    = makeLabel('Discharge: –');
+        this._gridAvgDischarge = makeLabel('Avg: –');
+        this._gridCharge       = makeLabel('Charge: –');
+        this._gridAvgCharge    = makeLabel('Avg: –');
+
+        leftCol.add_child(this._gridDischarge);
+        leftCol.add_child(this._gridAvgDischarge);
+        rightCol.add_child(this._gridCharge);
+        rightCol.add_child(this._gridAvgCharge);
+        dataRow.add_child(leftCol);
+        dataRow.add_child(rightCol);
+        vbox.add_child(dataRow);
+
+        this.menu.addMenuItem(outerItem);
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        // Repaint on open so the chart is fresh on first show.
+        this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
+            if (isOpen && this._chartArea)
+                this._chartArea.queue_repaint();
+        });
+
+        this._updateRangeBtnStyles();
     }
 
-    // A detail-pane row: icon on the left, metric/description label to its
-    // right. Returns {label, icon} so callers can update both.
-    _buildDetailItem(iconFile, initialText) {
-        const item = new PopupMenu.PopupBaseMenuItem({reactive: false});
+    _updateRangeBtnStyles() {
+        for (const btn of this._rangeBtns) {
+            if (btn._rangeMs === this._chartRange)
+                btn.add_style_class_name('power-monitor-range-btn-active');
+            else
+                btn.remove_style_class_name('power-monitor-range-btn-active');
+        }
+    }
 
-        const icon = this._buildIcon(iconFile, 'popup-menu-icon power-monitor-detail-icon');
-        if (icon)
-            item.add_child(icon);
-
-        const label = new St.Label({
-            text: initialText,
-            style_class: 'power-monitor-detail-label',
-            y_align: Clutter.ActorAlign.CENTER,
+    _pushHistory(metrics) {
+        this._history.push({
+            t: Date.now(),
+            discharge: metrics.discharge,
+            charge: metrics.charge,
         });
-        item.add_child(label);
+        if (this._history.length > HISTORY_MAX)
+            this._history.shift();
+    }
 
-        this.menu.addMenuItem(item);
-        return {label, icon};
+    _updateChartData() {
+        if (!this._lastMetrics)
+            return;
+        const m = this._lastMetrics;
+        const avgD = this._average('discharge');
+        const avgC = this._average('charge');
+        this._gridDischarge.text    = `Dis: ${formatWatts(m.discharge)}`;
+        this._gridCharge.text       = `Chg: ${formatWatts(m.charge)}`;
+        this._gridAvgDischarge.text = `Avg: ${avgD === null ? '–' : formatWatts(avgD)}`;
+        this._gridAvgCharge.text    = `Avg: ${avgC === null ? '–' : formatWatts(avgC)}`;
+    }
+
+    _drawChart(area) {
+        const cr = area.get_context();
+        const allocBox = area.get_allocation_box();
+        const W = allocBox.x2 - allocBox.x1;
+        const H = allocBox.y2 - allocBox.y1;
+
+        const now = Date.now();
+        const windowMs = this._chartRange;
+        const cutoff = now - windowMs;
+        const samples = this._history.filter(s => s.t >= cutoff);
+
+        // Layout constants
+        const TM = 18; // top margin (y-axis max label)
+        const BM = 22; // bottom margin (x-axis labels)
+        const LM = 42; // left margin (y-axis labels)
+        const RM = 6;  // right margin
+
+        const pl = LM;
+        const pr = W - RM;
+        const pt = TM;
+        const pb = H - BM;
+        const pw = pr - pl;
+        const ph = pb - pt;
+        const cy = pt + ph / 2; // y of zero line
+        const hh = ph / 2;      // half-height for value scaling
+
+        // Auto-scale: find max of |discharge| and charge over visible window
+        let maxVal = 0;
+        for (const s of samples) {
+            if (s.charge > maxVal) maxVal = s.charge;
+            const ad = Math.abs(s.discharge);
+            if (ad > maxVal) maxVal = ad;
+        }
+        maxVal = maxVal > 0.001 ? maxVal * 1.1 : 5.0;
+
+        // Maps a watt value to a canvas y pixel.
+        // v > 0 (charge) → above cy; v < 0 (discharge) → below cy.
+        const toY = v => cy - (v / maxVal) * hh;
+        // Maps a sample timestamp to a canvas x pixel.
+        const toX = t => pl + ((t - cutoff) / windowMs) * pw;
+
+        const dark = this._isDark();
+        const [tr, tg, tb, ta] = dark ? [1, 1, 1, 0.75] : [0.1, 0.1, 0.1, 0.85];
+
+        // Subtle plot boundary guides
+        cr.setSourceRGBA(tr, tg, tb, 0.1);
+        cr.setLineWidth(0.5);
+        cr.moveTo(pl, pt); cr.lineTo(pr, pt); cr.stroke();
+        cr.moveTo(pl, pb); cr.lineTo(pr, pb); cr.stroke();
+
+        if (samples.length > 1) {
+            const x0 = toX(samples[0].t);
+            const xN = toX(samples[samples.length - 1].t);
+
+            // Charge area — green fill above zero line
+            cr.setSourceRGBA(0.18, 0.72, 0.27, 0.3);
+            cr.moveTo(x0, cy);
+            for (const s of samples)
+                cr.lineTo(toX(s.t), toY(s.charge));
+            cr.lineTo(xN, cy);
+            cr.closePath();
+            cr.fill();
+
+            // Charge stroke
+            cr.setSourceRGBA(0.2, 0.82, 0.32, 0.85);
+            cr.setLineWidth(1.5);
+            cr.moveTo(toX(samples[0].t), toY(samples[0].charge));
+            for (let i = 1; i < samples.length; i++)
+                cr.lineTo(toX(samples[i].t), toY(samples[i].charge));
+            cr.stroke();
+
+            // Discharge area — red fill below zero line
+            cr.setSourceRGBA(0.82, 0.18, 0.18, 0.3);
+            cr.moveTo(x0, cy);
+            for (const s of samples)
+                cr.lineTo(toX(s.t), toY(s.discharge));
+            cr.lineTo(xN, cy);
+            cr.closePath();
+            cr.fill();
+
+            // Discharge stroke
+            cr.setSourceRGBA(0.9, 0.25, 0.2, 0.85);
+            cr.setLineWidth(1.5);
+            cr.moveTo(toX(samples[0].t), toY(samples[0].discharge));
+            for (let i = 1; i < samples.length; i++)
+                cr.lineTo(toX(samples[i].t), toY(samples[i].discharge));
+            cr.stroke();
+        }
+
+        // Zero line
+        cr.setSourceRGBA(tr, tg, tb, 0.3);
+        cr.setLineWidth(1.0);
+        cr.moveTo(pl, cy);
+        cr.lineTo(pr, cy);
+        cr.stroke();
+
+        // Text helper: renders label at (x, y), right/center/left aligned
+        const font = Pango.FontDescription.from_string('Sans 8');
+        const drawText = (text, x, y, align) => {
+            const layout = PangoCairo.create_layout(cr);
+            layout.set_font_description(font);
+            layout.set_text(text, -1);
+            const [tw] = layout.get_pixel_size();
+            let tx = x;
+            if (align === 'right')  tx = x - tw;
+            else if (align === 'center') tx = x - tw / 2;
+            cr.setSourceRGBA(tr, tg, tb, ta);
+            cr.moveTo(Math.round(tx), Math.round(y));
+            PangoCairo.show_layout(cr, layout);
+        };
+
+        // Y-axis labels
+        const maxStr = `${maxVal.toFixed(1)}W`;
+        drawText(`+${maxStr}`, LM - 2, pt,      'right');
+        drawText(`0W`,         LM - 2, cy - 6,  'right');
+        drawText(`−${maxStr}`, LM - 2, pb - 12, 'right');
+
+        // X-axis time labels at even intervals
+        let stepMs;
+        if (windowMs <= 15 * 60 * 1000)      stepMs = 5 * 60 * 1000;
+        else if (windowMs <= 60 * 60 * 1000) stepMs = 15 * 60 * 1000;
+        else                                  stepMs = 60 * 60 * 1000;
+
+        for (let ago = 0; ago <= windowMs + 1; ago += stepMs) {
+            const clamped = Math.min(ago, windowMs);
+            const x = pr - (clamped / windowMs) * pw;
+            let label;
+            if (clamped === 0) {
+                label = 'now';
+            } else if (windowMs <= 60 * 60 * 1000) {
+                label = `−${clamped / 60000}m`;
+            } else {
+                const h = clamped / 3600000;
+                label = `−${Number.isInteger(h) ? h : h.toFixed(1)}h`;
+            }
+            const align = clamped === 0 ? 'right' : clamped >= windowMs ? 'left' : 'center';
+            drawText(label, x, pb + 5, align);
+        }
+
+        cr.$dispose();
     }
 
     /* ------------------------- averages handling ------------------------- */
@@ -386,10 +630,6 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
         if (metrics === null) {
             this._panelLabel.text = 'n/a';
-            this._dischargeItem.text = 'Discharge: unavailable';
-            this._chargeItem.text = 'Charge: unavailable';
-            this._avgDischargeItem.text = 'Discharge: unavailable';
-            this._avgChargeItem.text = 'Charge: unavailable';
             return;
         }
 
@@ -406,15 +646,39 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         if (this._panelIcon)
             this._panelIcon.gicon = this._gicon(this._iconFileFor(activeKey));
 
-        this._dischargeItem.text = `Discharge: ${formatWatts(metrics.discharge)}`;
-        this._chargeItem.text = `Charge: ${formatWatts(metrics.charge)}`;
+        // Feed the history buffer and refresh the chart (only while open).
+        this._lastMetrics = metrics;
+        this._pushHistory(metrics);
+        this._updateChartData();
+        if (this._chartArea && this.menu.isOpen)
+            this._chartArea.queue_repaint();
+    }
 
-        const avgD = this._average('discharge');
-        const avgC = this._average('charge');
-        this._avgDischargeItem.text =
-            `Discharge: ${avgD === null ? '–' : formatWatts(avgD)}`;
-        this._avgChargeItem.text =
-            `Charge: ${avgC === null ? '–' : formatWatts(avgC)}`;
+    // A non-reactive section header (e.g. "Current:", "Averages:").
+    _addHeader(text) {
+        const item = new PopupMenu.PopupMenuItem(text, {reactive: false});
+        item.label.add_style_class_name('power-monitor-detail-header');
+        this.menu.addMenuItem(item);
+    }
+
+    // A detail-pane row: icon on the left, metric/description label to its
+    // right. Returns {label, icon} so callers can update both.
+    _buildDetailItem(iconFile, initialText) {
+        const item = new PopupMenu.PopupBaseMenuItem({reactive: false});
+
+        const icon = this._buildIcon(iconFile, 'popup-menu-icon power-monitor-detail-icon');
+        if (icon)
+            item.add_child(icon);
+
+        const label = new St.Label({
+            text: initialText,
+            style_class: 'power-monitor-detail-label',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        item.add_child(label);
+
+        this.menu.addMenuItem(item);
+        return {label, icon};
     }
 });
 
