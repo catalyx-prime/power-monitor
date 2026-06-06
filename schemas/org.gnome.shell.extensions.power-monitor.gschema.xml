@@ -78,5 +78,23 @@
       <summary>Number of charge samples</summary>
     </key>
 
+    <key name="brightness-manage" type="b">
+      <default>false</default>
+      <summary>Auto-manage screen brightness</summary>
+      <description>When enabled, the extension sets screen brightness based on the current power source.</description>
+    </key>
+    <key name="brightness-on-battery" type="i">
+      <default>50</default>
+      <range min="20" max="100"/>
+      <summary>Screen brightness on battery (%)</summary>
+      <description>Screen brightness percentage applied when running on battery power.</description>
+    </key>
+    <key name="brightness-on-ac" type="i">
+      <default>100</default>
+      <range min="20" max="100"/>
+      <summary>Screen brightness on AC power (%)</summary>
+      <description>Screen brightness percentage applied when plugged in to AC power.</description>
+    </key>
+
   </schema>
 </schemalist>

@@ -163,6 +163,8 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this._lastMetrics = null;
         this._repaintId = null;
         this._menuOpenId = null;
+        this._chartArea = null;
+        this._rangeBtns = [];
 
         try {
             this._ifaceSettings = new Gio.Settings({schema: 'org.gnome.desktop.interface'});
@@ -211,10 +213,7 @@ class PowerMonitorIndicator extends PanelMenu.Button {
                 this.menu.disconnect(this._menuOpenId);
                 this._menuOpenId = null;
             }
-            if (this._repaintId && this._chartArea) {
-                this._chartArea.disconnect(this._repaintId);
-                this._repaintId = null;
-            }
+            this._destroyChartContent();
         });
     }
 
@@ -286,8 +285,17 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     }
 
     _updateDetailIcons() {
+        const key = this._lastActiveKey ?? 'discharge';
         if (this._panelIcon)
-            this._panelIcon.gicon = this._gicon(this._iconFileFor(this._lastActiveKey ?? 'discharge'));
+            this._panelIcon.gicon = this._gicon(this._iconFileFor(key));
+        const update = (icon, iconKey) => {
+            if (icon)
+                icon.gicon = this._gicon(this._iconFileFor(iconKey));
+        };
+        update(this._dischargeIcon,    'discharge');
+        update(this._chargeIcon,       'charge');
+        update(this._avgDischargeIcon, 'discharge');
+        update(this._avgChargeIcon,    'charge');
     }
 
     // Returns a Gio.Icon for the given icon file, or null if it is missing.
@@ -310,7 +318,27 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     }
 
     _buildMenu() {
-        this._buildChartSection();
+        // Permanent section: chart content is rebuilt fresh on every open to
+        // avoid stale actor references after GNOME Shell closes the menu.
+        this._chartSection = new PopupMenu.PopupMenuSection();
+        this.menu.addMenuItem(this._chartSection);
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._addHeader('Current:');
+        ({label: this._dischargeItem, icon: this._dischargeIcon} =
+            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
+        ({label: this._chargeItem, icon: this._chargeIcon} =
+            this._buildDetailItem(this._iconFileFor('charge'), 'Charge: –'));
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._addHeader('Averages:');
+        ({label: this._avgDischargeItem, icon: this._avgDischargeIcon} =
+            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
+        ({label: this._avgChargeItem, icon: this._avgChargeIcon} =
+            this._buildDetailItem(this._iconFileFor('charge'), 'Charge: –'));
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         const resetItem = new PopupMenu.PopupMenuItem('Reset Averages');
         resetItem.label.add_style_class_name('power-monitor-detail-label');
@@ -321,11 +349,27 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         prefsItem.label.add_style_class_name('power-monitor-detail-label');
         prefsItem.connect('activate', () => this._extension.openPreferences());
         this.menu.addMenuItem(prefsItem);
+
+        this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
+            if (isOpen) {
+                this._buildChartContent();
+            } else {
+                // Defer teardown until after the close animation so the chart
+                // doesn't vanish visually while the menu is still fading out.
+                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    this._destroyChartContent();
+                    return GLib.SOURCE_REMOVE;
+                });
+            }
+        });
     }
 
     /* -------------------------- chart section ---------------------------- */
 
-    _buildChartSection() {
+    _buildChartContent() {
+        // Discard any leftover state before building fresh.
+        this._destroyChartContent();
+
         const outerItem = new PopupMenu.PopupBaseMenuItem({
             reactive: false,
             style_class: 'power-monitor-chart-item',
@@ -371,51 +415,20 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this._repaintId = this._chartArea.connect('repaint', area => this._drawChart(area));
         vbox.add_child(this._chartArea);
 
-        // 2×2 data summary below the chart
-        const dataRow = new St.BoxLayout({
-            x_expand: true,
-            style_class: 'power-monitor-data-row',
-        });
-        const leftCol = new St.BoxLayout({
-            vertical: true,
-            x_expand: true,
-            style_class: 'power-monitor-data-col',
-        });
-        const rightCol = new St.BoxLayout({
-            vertical: true,
-            x_expand: true,
-            style_class: 'power-monitor-data-col',
-        });
-
-        const makeLabel = text => new St.Label({
-            text,
-            style_class: 'power-monitor-grid-label',
-            x_expand: true,
-        });
-
-        this._gridDischarge    = makeLabel('Discharge: –');
-        this._gridAvgDischarge = makeLabel('Avg: –');
-        this._gridCharge       = makeLabel('Charge: –');
-        this._gridAvgCharge    = makeLabel('Avg: –');
-
-        leftCol.add_child(this._gridDischarge);
-        leftCol.add_child(this._gridAvgDischarge);
-        rightCol.add_child(this._gridCharge);
-        rightCol.add_child(this._gridAvgCharge);
-        dataRow.add_child(leftCol);
-        dataRow.add_child(rightCol);
-        vbox.add_child(dataRow);
-
-        this.menu.addMenuItem(outerItem);
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-        // Repaint on open so the chart is fresh on first show.
-        this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
-            if (isOpen && this._chartArea)
-                this._chartArea.queue_repaint();
-        });
-
+        this._chartSection.addMenuItem(outerItem);
         this._updateRangeBtnStyles();
+        this._chartArea.queue_repaint();
+    }
+
+    _destroyChartContent() {
+        if (this._repaintId && this._chartArea) {
+            this._chartArea.disconnect(this._repaintId);
+            this._repaintId = null;
+        }
+        this._chartArea = null;
+        this._rangeBtns = [];
+        if (this._chartSection)
+            this._chartSection.removeAll();
     }
 
     _updateRangeBtnStyles() {
@@ -435,18 +448,6 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         });
         if (this._history.length > HISTORY_MAX)
             this._history.shift();
-    }
-
-    _updateChartData() {
-        if (!this._lastMetrics)
-            return;
-        const m = this._lastMetrics;
-        const avgD = this._average('discharge');
-        const avgC = this._average('charge');
-        this._gridDischarge.text    = `Dis: ${formatWatts(m.discharge)}`;
-        this._gridCharge.text       = `Chg: ${formatWatts(m.charge)}`;
-        this._gridAvgDischarge.text = `Avg: ${avgD === null ? '–' : formatWatts(avgD)}`;
-        this._gridAvgCharge.text    = `Avg: ${avgC === null ? '–' : formatWatts(avgC)}`;
     }
 
     _drawChart(area) {
@@ -630,6 +631,10 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
         if (metrics === null) {
             this._panelLabel.text = 'n/a';
+            this._dischargeItem.text    = 'Discharge: unavailable';
+            this._chargeItem.text       = 'Charge: unavailable';
+            this._avgDischargeItem.text = 'Discharge: unavailable';
+            this._avgChargeItem.text    = 'Charge: unavailable';
             return;
         }
 
@@ -646,10 +651,18 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         if (this._panelIcon)
             this._panelIcon.gicon = this._gicon(this._iconFileFor(activeKey));
 
+        this._dischargeItem.text = `Discharge: ${formatWatts(metrics.discharge)}`;
+        this._chargeItem.text    = `Charge: ${formatWatts(metrics.charge)}`;
+        const avgD = this._average('discharge');
+        const avgC = this._average('charge');
+        this._avgDischargeItem.text =
+            `Discharge: ${avgD === null ? '–' : formatWatts(avgD)}`;
+        this._avgChargeItem.text =
+            `Charge: ${avgC === null ? '–' : formatWatts(avgC)}`;
+
         // Feed the history buffer and refresh the chart (only while open).
         this._lastMetrics = metrics;
         this._pushHistory(metrics);
-        this._updateChartData();
         if (this._chartArea && this.menu.isOpen)
             this._chartArea.queue_repaint();
     }
@@ -703,6 +716,7 @@ export default class PowerMonitorExtension extends Extension {
             'changed::panel-position', () => this._addIndicator());
 
         this._watchPowerSource();
+        this._setupBrightnessControl();
 
         // At startup the laptop may already be plugged in, in which case the
         // UPower `on-battery` transition that normally triggers a settle re-read
@@ -728,6 +742,7 @@ export default class PowerMonitorExtension extends Extension {
         this._onBatteryId = this._upowerClient.connect('notify::on-battery', () => {
             this._indicator.update();
             this._scheduleSettleUpdate();
+            this._applyBrightness();
         });
     }
 
@@ -759,6 +774,92 @@ export default class PowerMonitorExtension extends Extension {
                 this._upowerClient.disconnect(this._onBatteryId);
             this._onBatteryId = null;
             this._upowerClient = null;
+        }
+    }
+
+    _setupBrightnessControl() {
+        this._brightnessSettingIds = [
+            this._settings.connect('changed::brightness-manage',     () => this._applyBrightness()),
+            this._settings.connect('changed::brightness-on-battery', () => this._applyBrightness()),
+            this._settings.connect('changed::brightness-on-ac',      () => this._applyBrightness()),
+        ];
+        // Apply the configured level at startup, but without the OSD popup: the
+        // osdWindowManager isn't ready this early in enable(), and calling
+        // show() here throws — which would propagate out of enable() and put the
+        // whole extension into ERROR state.
+        this._applyBrightness(false);
+    }
+
+    _applyBrightness(showOsd = true) {
+        if (!this._settings || !this._settings.get_boolean('brightness-manage'))
+            return;
+
+        let onBattery = false;
+        if (this._upowerClient)
+            onBattery = this._upowerClient.on_battery;
+        else {
+            const m = readMetrics();
+            onBattery = m ? m.onBattery : false;
+        }
+
+        const pct = this._settings.get_int(
+            onBattery ? 'brightness-on-battery' : 'brightness-on-ac');
+
+        // Find the backlight device and its max brightness from sysfs.
+        const backlightDir = Gio.File.new_for_path('/sys/class/backlight');
+        let backlightName = null;
+        let maxBrightness = 0;
+        try {
+            const enumerator = backlightDir.enumerate_children(
+                'standard::name', Gio.FileQueryInfoFlags.NONE, null);
+            let info;
+            while ((info = enumerator.next_file(null)) !== null) {
+                const name = info.get_name();
+                const maxRaw = readInt(`/sys/class/backlight/${name}/max_brightness`);
+                if (maxRaw !== null && maxRaw > 0) {
+                    backlightName = name;
+                    maxBrightness = maxRaw;
+                    break;
+                }
+            }
+            enumerator.close(null);
+        } catch (_e) {}
+
+        if (backlightName === null)
+            return;
+
+        const value = Math.round((pct / 100) * maxBrightness);
+
+        // logind's SetBrightness(subsystem, name, value) works on the system
+        // bus and doesn't require root — this replaced the old
+        // org.gnome.SettingsDaemon.Power.Screen DBus interface which was
+        // removed in GSD 50.
+        try {
+            Gio.DBus.system.call(
+                'org.freedesktop.login1',
+                '/org/freedesktop/login1/session/auto',
+                'org.freedesktop.login1.Session',
+                'SetBrightness',
+                new GLib.Variant('(ssu)', ['backlight', backlightName, value]),
+                null,
+                Gio.DBusCallFlags.NONE,
+                -1,
+                null,
+                null
+            );
+        } catch (_e) {}
+
+        // Guard the OSD: a failure here must never escape into enable() or a
+        // settings handler and break the rest of the extension.
+        if (showOsd) {
+            try {
+                Main.osdWindowManager.show(
+                    -1,
+                    Gio.ThemedIcon.new('display-brightness-symbolic'),
+                    null,
+                    pct / 100
+                );
+            } catch (_e) {}
         }
     }
 
@@ -819,6 +920,12 @@ export default class PowerMonitorExtension extends Extension {
     disable() {
         this._stopPolling();
         this._unwatchPowerSource();
+
+        if (this._brightnessSettingIds) {
+            for (const id of this._brightnessSettingIds)
+                this._settings.disconnect(id);
+            this._brightnessSettingIds = null;
+        }
 
         if (this._settingsChangedId) {
             this._settings.disconnect(this._settingsChangedId);

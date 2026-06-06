@@ -86,9 +86,20 @@
     padding: 8px 4px 4px 4px;
 }
 
+/* St honors min-width on a container but ignores a plain `width` on a
+   BoxLayout (the box sizes to its natural content instead), so use min-width
+   to force the chart panel wider and let the detail-size steps scale it. */
 .power-monitor-chart-box {
     spacing: 6px;
-    min-width: 340px;
+    min-width: 350px;
+}
+
+.power-monitor-detail-medium .power-monitor-chart-box {
+    min-width: 430px;
+}
+
+.power-monitor-detail-large .power-monitor-chart-box {
+    min-width: 510px;
 }
 
 .power-monitor-chart-area {

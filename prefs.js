@@ -32,6 +32,7 @@ const DETAIL_SIZES = [
 export default class PowerMonitorPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
+        const handlers = [];
 
         const page = new Adw.PreferencesPage({
             title: 'Power Monitor',
@@ -131,6 +132,59 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
         });
         generalGroup.add(intervalRow);
 
+        /* ---------------------- Screen Brightness group ------------------ */
+
+        const brightnessGroup = new Adw.PreferencesGroup({
+            title: 'Screen Brightness',
+            description: 'Automatically set screen brightness when switching power sources.',
+        });
+        page.add(brightnessGroup);
+
+        const manageRow = new Adw.SwitchRow({
+            title: 'Manage brightness',
+            subtitle: 'Apply configured levels when plugging in or unplugging',
+        });
+        settings.bind('brightness-manage', manageRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        brightnessGroup.add(manageRow);
+
+        const batterySpinRow = new Adw.SpinRow({
+            title: 'On battery',
+            subtitle: 'Brightness percentage while running on battery power',
+            adjustment: new Gtk.Adjustment({
+                lower: 20, upper: 100, step_increment: 5, page_increment: 10, value: 50,
+            }),
+            climb_rate: 1,
+            digits: 0,
+        });
+        batterySpinRow.value = settings.get_int('brightness-on-battery');
+        settings.bind('brightness-manage', batterySpinRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+        brightnessGroup.add(batterySpinRow);
+        batterySpinRow.connect('notify::value', () => {
+            settings.set_int('brightness-on-battery', Math.round(batterySpinRow.value));
+        });
+        handlers.push(settings.connect('changed::brightness-on-battery', () => {
+            batterySpinRow.value = settings.get_int('brightness-on-battery');
+        }));
+
+        const acSpinRow = new Adw.SpinRow({
+            title: 'On AC power',
+            subtitle: 'Brightness percentage while plugged in',
+            adjustment: new Gtk.Adjustment({
+                lower: 20, upper: 100, step_increment: 5, page_increment: 10, value: 100,
+            }),
+            climb_rate: 1,
+            digits: 0,
+        });
+        acSpinRow.value = settings.get_int('brightness-on-ac');
+        settings.bind('brightness-manage', acSpinRow, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+        brightnessGroup.add(acSpinRow);
+        acSpinRow.connect('notify::value', () => {
+            settings.set_int('brightness-on-ac', Math.round(acSpinRow.value));
+        });
+        handlers.push(settings.connect('changed::brightness-on-ac', () => {
+            acSpinRow.value = settings.get_int('brightness-on-ac');
+        }));
+
         /* ------------------------ Averages group ------------------------- */
 
         const avgGroup = new Adw.PreferencesGroup({
@@ -174,7 +228,6 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
         refreshLabels();
 
         // Keep the displayed averages live while the panel keeps sampling.
-        const handlers = [];
         for (const key of [
             'discharge-sum', 'discharge-count',
             'charge-sum', 'charge-count',
