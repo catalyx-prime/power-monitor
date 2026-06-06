@@ -805,49 +805,20 @@ export default class PowerMonitorExtension extends Extension {
         const pct = this._settings.get_int(
             onBattery ? 'brightness-on-battery' : 'brightness-on-ac');
 
-        // Find the backlight device and its max brightness from sysfs.
-        const backlightDir = Gio.File.new_for_path('/sys/class/backlight');
-        let backlightName = null;
-        let maxBrightness = 0;
-        try {
-            const enumerator = backlightDir.enumerate_children(
-                'standard::name', Gio.FileQueryInfoFlags.NONE, null);
-            let info;
-            while ((info = enumerator.next_file(null)) !== null) {
-                const name = info.get_name();
-                const maxRaw = readInt(`/sys/class/backlight/${name}/max_brightness`);
-                if (maxRaw !== null && maxRaw > 0) {
-                    backlightName = name;
-                    maxBrightness = maxRaw;
-                    break;
-                }
-            }
-            enumerator.close(null);
-        } catch (_e) {}
-
-        if (backlightName === null)
+        // GNOME 50 moved screen-brightness control out of gsd-power (the old
+        // org.gnome.SettingsDaemon.Power.Screen DBus interface is gone) and into
+        // gnome-shell/mutter. Main.brightnessManager.globalScale is the
+        // in-process object the Quick Settings brightness slider is bound to, so
+        // writing its value (a 0..1 float) both drives the hardware via mutter's
+        // backlight API *and* moves the slider — keeping the shell UI in sync.
+        // Going around it (logind SetBrightness, raw sysfs) changes the hardware
+        // but leaves the slider/OSD stale. globalScale is null when no monitor
+        // exposes a controllable backlight, so guard for it.
+        const scale = Main.brightnessManager?.globalScale;
+        if (!scale)
             return;
 
-        const value = Math.round((pct / 100) * maxBrightness);
-
-        // logind's SetBrightness(subsystem, name, value) works on the system
-        // bus and doesn't require root — this replaced the old
-        // org.gnome.SettingsDaemon.Power.Screen DBus interface which was
-        // removed in GSD 50.
-        try {
-            Gio.DBus.system.call(
-                'org.freedesktop.login1',
-                '/org/freedesktop/login1/session/auto',
-                'org.freedesktop.login1.Session',
-                'SetBrightness',
-                new GLib.Variant('(ssu)', ['backlight', backlightName, value]),
-                null,
-                Gio.DBusCallFlags.NONE,
-                -1,
-                null,
-                null
-            );
-        } catch (_e) {}
+        scale.value = Math.max(0, Math.min(1, pct / 100));
 
         // Guard the OSD: a failure here must never escape into enable() or a
         // settings handler and break the rest of the extension.

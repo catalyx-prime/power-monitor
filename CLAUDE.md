@@ -10,7 +10,8 @@ see `README.md`. This file is the orientation for working *on* the code.
 ## Layout
 
 - `extension.js` — the shell-side code (runs inside gnome-shell). Panel indicator,
-  sysfs reading, polling loop, rolling-average accumulation.
+  sysfs reading, polling loop, rolling-average accumulation, the detail-pane
+  power-history chart, and automatic screen-brightness control.
 - `prefs.js` — the preferences window (runs in a separate Gtk4/Adw process, **not**
   inside gnome-shell — it has no access to `St`, `Clutter`, `Main`, or the indicator).
 - `schemas/org.gnome.shell.extensions.power-monitor.gschema.xml` — GSettings keys.
@@ -64,11 +65,28 @@ for syntax, then exercise the real shell after a re-login.
 - **Clean up in `disable()`.** Every `GLib.timeout_add*`, signal `connect`, and the
   indicator itself must be torn down — see `_stopPolling()` / `disable()`. Leaking a
   timeout or signal handler across enable/disable cycles is the classic extension bug.
+- **Brightness goes through `Main.brightnessManager.globalScale`.** GNOME 50 removed
+  the old `org.gnome.SettingsDaemon.Power.Screen` DBus interface and moved brightness
+  into gnome-shell/mutter. `globalScale` is the in-process object the Quick Settings
+  slider is bound to; setting its `value` (a 0..1 float) drives the hardware *and*
+  keeps the slider/OSD in sync. Going around it (logind `SetBrightness`, raw sysfs)
+  moves the hardware but leaves the UI stale. It's `null` when no monitor exposes a
+  controllable backlight, so always guard for it (`_applyBrightness()`). Don't call
+  `osdWindowManager.show()` during `enable()` — it isn't ready that early and throws;
+  `_setupBrightnessControl()` passes `showOsd=false` for the startup apply.
+- **The history chart is in-memory only.** `_history` is a rolling buffer (capped at
+  `HISTORY_MAX`), not GSettings-backed, so it starts empty on every shell start and is
+  never persisted. The chart is rebuilt fresh on each menu open and only repaints
+  while the menu is open — see `_buildChartContent()` / `_destroyChartContent()`.
 - **GNOME version compatibility.** Use current GJS/St/Clutter idioms and check what
   the installed shell actually ships (`/usr/lib64/gnome-shell/St-*.typelib`,
   `/usr/share/gnome-shell/`). Removed-API breakage is the main porting hazard — e.g.
   the old `St.Align` enum is gone in GNOME 50; alignment uses `Clutter.ActorAlign`.
   Update the `shell-version` array in `metadata.json` when targeting a new release.
+  The extension currently targets **GNOME 50 only**: brightness control depends on
+  `Main.brightnessManager` (GNOME 50's in-shell backlight object), which replaced the
+  removed `org.gnome.SettingsDaemon.Power.Screen` DBus interface — so older shells
+  can't drive the slider. Don't widen `shell-version` without restoring a fallback.
 
 ## Formatting
 

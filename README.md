@@ -11,15 +11,20 @@ At any instant a single battery is either charging *or* discharging, so only one
 of the two is non-zero at a time. The top bar **automatically shows whichever
 metric is active** — discharge while on battery, charge while charging —
 optionally with its icon. Clicking the panel item opens a detail pane that
-lists both metrics, each with its icon on the left, plus the rolling averages.
-Values are formatted to one decimal place with a `W` suffix. The extension
-tracks a rolling average of each metric since the last reboot (or last manual
-reset).
+lists both metrics, each with its icon on the left, plus the rolling averages,
+and a **power-history chart** of recent readings. Values are formatted to one
+decimal place with a `W` suffix. The extension tracks a rolling average of each
+metric since the last reboot (or last manual reset).
+
+It can also **automatically set screen brightness** when you plug in or unplug,
+applying a configurable level for AC versus battery (see [Preferences](#preferences)).
 
 > This extension targets **single-battery** machines (laptops). The first
 > battery reported under `/sys/class/power_supply/` is used.
 
-Supported GNOME Shell versions: **45, 46, 47, 48, 49, 50** (ESM extension format).
+Supported GNOME Shell version: **50** (ESM extension format). The automatic
+screen-brightness feature relies on GNOME 50's in-shell brightness manager, which
+replaced the DBus brightness interface used by earlier releases.
 
 ## How the metrics are derived
 
@@ -39,6 +44,14 @@ Direction comes from the battery `status` field rather than the sign of
 > Note: when running on AC with the battery fully charged, the kernel exposes no
 > battery current, so both metrics read `0.0 W`. System-wide AC draw is not
 > available from the battery sysfs interface.
+
+## Power-history chart
+
+The detail pane includes a chart of recent power readings, plotted from an
+in-memory buffer of samples (no data is written to disk, and the buffer starts
+empty each time the shell starts). Toggle buttons above the chart switch the
+visible window between **15 min**, **1 hr**, and **4 hr**. Up to 4 hours of
+history is retained.
 
 ## Install
 
@@ -104,6 +117,9 @@ The preferences window lets you:
 - Choose the **detail panel size**: original, medium (1.25x), or large (1.5x)
   (default original).
 - Choose the **refresh interval**: 5, 10, 15, 20, 25, or 30 seconds (default 10).
+- **Manage brightness**: when enabled, the extension sets screen brightness from
+  the configured **On battery** and **On AC power** levels (each 20–100%) every
+  time the power source changes.
 - View the current **rolling averages** and sample count.
 - **Reset Averages** to clear the accumulated totals.
 
