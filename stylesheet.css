@@ -1,0 +1,81 @@
+.power-monitor-panel-button,
+.power-monitor-panel-button:hover,
+.power-monitor-panel-button:focus,
+.power-monitor-panel-button:active,
+.power-monitor-panel-button:checked {
+    background-color: transparent;
+    box-shadow: none;
+    border-color: transparent;
+}
+
+/* spacing puts a small gap between the icon and the metric label; with the
+   icon hidden there's a single child, so the label still sits flush. */
+.power-monitor-box {
+    spacing: 6px;
+}
+
+/* GNOME's system-status-icon class adds uneven horizontal padding around panel
+   icons; strip it so the gap to the label comes only from the box spacing. */
+.power-monitor-icon {
+    padding: 0;
+    margin: 0;
+}
+
+.power-monitor-label {
+    font-feature-settings: "tnum";
+}
+
+/* Light mode: explicit light background + dark text for all labels. */
+.power-monitor-force-light {
+    background-color: #f6f5f4;
+    border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.power-monitor-force-light .popup-menu-item-label,
+.power-monitor-force-light .power-monitor-detail-label {
+    color: rgba(0, 0, 0, 0.85);
+}
+
+.power-monitor-force-light .popup-separator-menu-item-separator {
+    background-color: rgba(0, 0, 0, 0.15);
+}
+
+.power-monitor-force-light .popup-menu-item:hover,
+.power-monitor-force-light .popup-menu-item:focus {
+    background-color: rgba(0, 0, 0, 0.08);
+    color: rgba(0, 0, 0, 0.85);
+}
+
+/* Dark mode: explicit light text for all labels. */
+.power-monitor-force-dark .popup-menu-item-label,
+.power-monitor-force-dark .power-monitor-detail-label {
+    color: rgba(255, 255, 255, 0.85);
+}
+
+.power-monitor-detail-icon {
+    margin-right: 6px;
+    /* 25% larger than GNOME's default 16px popup-menu-icon. */
+    icon-size: 20px;
+}
+
+.power-monitor-detail-header {
+    font-weight: bold;
+}
+
+/* Detail-panel size steps. Font-size cascades to every label in the menu;
+   icon-size has to be set explicitly on the St.Icon descendants. */
+.power-monitor-detail-medium {
+    font-size: 1.25em;
+}
+
+.power-monitor-detail-medium .popup-menu-icon {
+    icon-size: 25px;
+}
+
+.power-monitor-detail-large {
+    font-size: 1.5em;
+}
+
+.power-monitor-detail-large .popup-menu-icon {
+    icon-size: 30px;
+}

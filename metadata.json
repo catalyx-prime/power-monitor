@@ -1,0 +1,9 @@
+{
+  "uuid": "power-monitor@local",
+  "name": "Power Monitor",
+  "description": "Displays real-time battery discharge and charge power metrics in the system status bar, with rolling averages and a configurable refresh interval.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "settings-schema": "org.gnome.shell.extensions.power-monitor",
+  "url": "https://example.com/power-monitor",
+  "version": 2
+}

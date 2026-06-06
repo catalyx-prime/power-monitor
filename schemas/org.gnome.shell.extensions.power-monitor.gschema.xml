@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+
+  <enum id="org.gnome.shell.extensions.power-monitor.panel-position">
+    <value nick="left" value="0"/>
+    <value nick="center" value="1"/>
+    <value nick="right" value="2"/>
+  </enum>
+
+  <enum id="org.gnome.shell.extensions.power-monitor.detail-size">
+    <value nick="original" value="0"/>
+    <value nick="medium" value="1"/>
+    <value nick="large" value="2"/>
+  </enum>
+
+  <enum id="org.gnome.shell.extensions.power-monitor.color-mode">
+    <value nick="auto" value="0"/>
+    <value nick="light" value="1"/>
+    <value nick="dark" value="2"/>
+  </enum>
+
+  <schema id="org.gnome.shell.extensions.power-monitor"
+          path="/org/gnome/shell/extensions/power-monitor/">
+
+    <key name="panel-position" enum="org.gnome.shell.extensions.power-monitor.panel-position">
+      <default>'right'</default>
+      <summary>Panel placement</summary>
+      <description>Which area of the top bar the indicator is placed in: left, center, or right.</description>
+    </key>
+
+    <key name="detail-size" enum="org.gnome.shell.extensions.power-monitor.detail-size">
+      <default>'original'</default>
+      <summary>Detail panel size</summary>
+      <description>Scale of the dropdown detail panel: original, medium (1.25x), or large (1.5x).</description>
+    </key>
+
+    <key name="color-mode" enum="org.gnome.shell.extensions.power-monitor.color-mode">
+      <default>'auto'</default>
+      <summary>Color mode</summary>
+      <description>Whether the detail panel uses light, dark, or system-matching colors. Auto follows the system color-scheme preference.</description>
+    </key>
+
+    <key name="panel-show-icon" type="b">
+      <default>true</default>
+      <summary>Show the metric icon in the panel</summary>
+      <description>Whether the icon for the selected metric is shown alongside its value in the top bar.</description>
+    </key>
+
+    <key name="refresh-interval" type="i">
+      <default>10</default>
+      <range min="5" max="30"/>
+      <summary>Refresh interval</summary>
+      <description>How often (in seconds) the power metrics are polled. Allowed values: 5, 10, 15, 20, 25, 30.</description>
+    </key>
+
+    <key name="boot-id" type="s">
+      <default>''</default>
+      <summary>Boot identifier of the last accumulation</summary>
+      <description>Stores the kernel boot_id used to detect reboots. When it changes, the rolling averages are reset.</description>
+    </key>
+
+    <!-- Rolling-average accumulators: running totals and sample counts. -->
+    <key name="discharge-sum" type="d">
+      <default>0.0</default>
+      <summary>Running total of discharge samples (W)</summary>
+    </key>
+    <key name="discharge-count" type="i">
+      <default>0</default>
+      <summary>Number of discharge samples</summary>
+    </key>
+
+    <key name="charge-sum" type="d">
+      <default>0.0</default>
+      <summary>Running total of charge samples (W)</summary>
+    </key>
+    <key name="charge-count" type="i">
+      <default>0</default>
+      <summary>Number of charge samples</summary>
+    </key>
+
+  </schema>
+</schemalist>
