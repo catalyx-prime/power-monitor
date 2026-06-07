@@ -51,7 +51,9 @@ The detail pane includes a chart of recent power readings, plotted from an
 in-memory buffer of samples (no data is written to disk, and the buffer starts
 empty each time the shell starts). Toggle buttons above the chart switch the
 visible window between **15 min**, **1 hr**, and **4 hr**. Up to 4 hours of
-history is retained.
+history is retained. Tracking continues while the screen is locked, so locking
+and unlocking does not leave a gap in the chart (a true suspend still does,
+since nothing runs while suspended).
 
 ## Install
 

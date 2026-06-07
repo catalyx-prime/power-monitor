@@ -89,12 +89,15 @@ for syntax, then exercise the real shell after a re-login.
   `HISTORY_MAX`), not GSettings-backed, so it starts empty on every shell start and is
   never persisted to disk. It is owned by the long-lived *extension* object (assigned
   in `enable()` with `??=`, shared by reference into the indicator), **not** the
-  indicator, so it survives the `disable()`/`enable()` cycle GNOME Shell runs when the
-  screen locks — the lock screen switches session mode and disables extensions that
-  don't declare `unlock-dialog`, which would otherwise drop the buffer. (Polling stops
-  while disabled, so a long lock leaves a time gap in the data, but pre-lock samples
-  are retained.) The chart is rebuilt fresh on each menu open and only repaints while
-  the menu is open — see `_buildChartContent()` / `_destroyChartContent()`.
+  indicator, so it survives any `disable()`/`enable()` cycle (e.g. a panel-position
+  change) without dropping the buffer. `metadata.json` declares the `unlock-dialog`
+  session mode so the extension stays *enabled* on the lock screen and keeps polling —
+  without it the lock screen switches session mode and disables the extension, leaving
+  a flat-line gap in the chart (a straight `lineTo` bridging the pre-lock and
+  post-lock samples) that reads as a slow phantom drift. A true *suspend* still leaves
+  a gap (nothing runs while suspended). The chart is rebuilt fresh on each menu open
+  and only repaints while the menu is open — see `_buildChartContent()` /
+  `_destroyChartContent()`.
 - **GNOME version compatibility.** Use current GJS/St/Clutter idioms and check what
   the installed shell actually ships (`/usr/lib64/gnome-shell/St-*.typelib`,
   `/usr/share/gnome-shell/`). Removed-API breakage is the main porting hazard — e.g.

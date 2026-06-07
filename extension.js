@@ -177,10 +177,12 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
         // Rolling history buffer for the chart (in-memory, no file I/O). It
         // lives on the long-lived extension object, not the indicator, so it
-        // survives a disable()/enable() cycle — notably the one GNOME Shell runs
-        // when the screen locks (the lock screen switches session mode and
-        // disables us, then re-enables on unlock). Sharing the array by
-        // reference means _pushHistory keeps appending to the same buffer.
+        // survives a disable()/enable() cycle (e.g. a panel-position change, or
+        // any future re-enable). We declare the `unlock-dialog` session mode in
+        // metadata.json so the extension stays *enabled* on the lock screen and
+        // keeps polling — that's what prevents a flat-line gap in the chart while
+        // the screensaver is up. Sharing the array by reference means
+        // _pushHistory keeps appending to the same buffer.
         this._history = extension._history;
 
         // Average accumulators are batched in memory and flushed to GSettings
