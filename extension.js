@@ -175,8 +175,13 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this._extension = extension;
         this._settings = extension.getSettings();
 
-        // Rolling history buffer for the chart (in-memory, no file I/O).
-        this._history = [];
+        // Rolling history buffer for the chart (in-memory, no file I/O). It
+        // lives on the long-lived extension object, not the indicator, so it
+        // survives a disable()/enable() cycle — notably the one GNOME Shell runs
+        // when the screen locks (the lock screen switches session mode and
+        // disables us, then re-enables on unlock). Sharing the array by
+        // reference means _pushHistory keeps appending to the same buffer.
+        this._history = extension._history;
 
         // Average accumulators are batched in memory and flushed to GSettings
         // periodically rather than on every tick (see _flushAccumulators). These
@@ -761,6 +766,13 @@ function formatWatts(value) {
 export default class PowerMonitorExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
+
+        // The chart history buffer is owned here, not by the indicator, so it
+        // outlives the disable()/enable() cycle that GNOME Shell triggers on
+        // screen lock (and any other re-enable). It is only ever empty on a true
+        // shell (re)start, which creates a fresh extension object. Initialize it
+        // once; never clobber an existing buffer on re-enable.
+        this._history ??= [];
 
         this._addIndicator();
 
