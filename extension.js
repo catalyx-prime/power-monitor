@@ -217,6 +217,7 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
         this._buildPanel();
         this._buildMenu();
+        this._installMenuPositioning();
         this._applyDetailSize();
         this._applyColorMode();
 
@@ -351,6 +352,67 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             gicon,
             style_class: styleClass,
         });
+    }
+
+    // Aligns the dropdown detail panel horizontally with the panel pill:
+    //   - left pill   → panel's left edge meets the pill's left edge
+    //   - right pill  → panel's right edge meets the pill's right edge
+    //   - center pill → panel's middle meets the pill's middle
+    // GNOME's BoxPointer positions the box around the *arrow*, offset by the
+    // rounded-corner `margin` (4*border-radius + arrow-base + …), so its
+    // arrow/source alignment fractions can't express exact edge alignment for
+    // the left/right cases. We wrap _reposition to let it do its work, then
+    // rewrite the box origin. The override reads `panel-position` live so it
+    // always reflects the current setting, and it dies with the menu's
+    // boxpointer when the indicator is torn down — no explicit cleanup needed.
+    _installMenuPositioning() {
+        const boxPointer = this.menu._boxPointer;
+        if (!boxPointer || boxPointer._powerMonitorPatched)
+            return;
+        boxPointer._powerMonitorPatched = true;
+
+        const indicator = this;
+        const originalReposition = boxPointer._reposition;
+        boxPointer._reposition = function (allocationBox) {
+            originalReposition.call(this, allocationBox);
+
+            // Only horizontal panel dropdowns (arrow on top/bottom) get edge
+            // alignment; a side arrow would need vertical logic instead.
+            if (this._arrowSide !== St.Side.TOP && this._arrowSide !== St.Side.BOTTOM)
+                return;
+
+            const src = this._sourceExtents;
+            if (!src)
+                return;
+            const srcLeft = src.get_top_left().x;
+            const srcRight = src.get_bottom_right().x;
+            const boxWidth = allocationBox.get_width();
+
+            const position = indicator._settings.get_string('panel-position');
+            let stageX;
+            if (position === 'left')
+                stageX = srcLeft;
+            else if (position === 'right')
+                stageX = srcRight - boxWidth;
+            else
+                stageX = (srcLeft + srcRight) / 2 - boxWidth / 2;
+
+            // Don't let edge alignment push the panel off the monitor.
+            const wa = this._workArea;
+            if (wa)
+                stageX = Math.max(wa.x, Math.min(stageX, wa.x + wa.width - boxWidth));
+
+            // _reposition computes in stage coordinates but writes a
+            // parent-relative origin; convert back the same way, keeping the
+            // vertical position the original already worked out.
+            const [parentStageX] = this.get_parent().get_transformed_position();
+            allocationBox.set_origin(Math.round(stageX - parentStageX), allocationBox.y1);
+
+            // Keep the arrow under the middle of the pill.
+            let arrowOrigin = (srcLeft + srcRight) / 2 - stageX;
+            arrowOrigin = Math.max(0, Math.min(arrowOrigin, boxWidth));
+            this.setArrowOrigin(arrowOrigin);
+        };
     }
 
     _buildMenu() {
