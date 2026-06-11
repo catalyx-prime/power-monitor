@@ -82,11 +82,23 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
         const settings = this.getSettings();
         const handlers = [];
 
-        const page = new Adw.PreferencesPage({
-            title: 'Power Monitor',
+        const generalPage = new Adw.PreferencesPage({
+            title: 'General',
+            icon_name: 'preferences-system-symbolic',
+        });
+        window.add(generalPage);
+
+        const powerPage = new Adw.PreferencesPage({
+            title: 'Power',
             icon_name: 'battery-symbolic',
         });
-        window.add(page);
+        window.add(powerPage);
+
+        const appearancePage = new Adw.PreferencesPage({
+            title: 'Appearance',
+            icon_name: 'video-display-symbolic',
+        });
+        window.add(appearancePage);
 
         /* -------------------------- Panel group -------------------------- */
 
@@ -94,7 +106,7 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
             title: 'Panel Display',
             description: 'What the top bar shows.',
         });
-        page.add(panelGroup);
+        appearancePage.add(panelGroup);
 
         const positionModel = new Gtk.StringList();
         for (const position of PANEL_POSITIONS)
@@ -161,7 +173,7 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
             title: 'General',
             description: 'How often the metrics are refreshed.',
         });
-        page.add(generalGroup);
+        generalPage.add(generalGroup);
 
         const model = new Gtk.StringList();
         for (const seconds of INTERVALS)
@@ -186,7 +198,7 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
             title: 'Screen Brightness',
             description: 'Automatically set screen brightness when switching power sources.',
         });
-        page.add(brightnessGroup);
+        powerPage.add(brightnessGroup);
 
         const manageRow = new Adw.SwitchRow({
             title: 'Manage brightness',
@@ -239,7 +251,7 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
             title: 'Power Profiles',
             description: 'Automatically set the system power profile when switching power sources.',
         });
-        page.add(profileGroup);
+        powerPage.add(profileGroup);
 
         const profileManageRow = new Adw.SwitchRow({
             title: 'Manage power profile',
@@ -281,7 +293,7 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
             title: 'Rolling Averages',
             description: 'Averages accumulate since the last reboot or manual reset.',
         });
-        page.add(avgGroup);
+        generalPage.add(avgGroup);
 
         const dischargeRow = new Adw.ActionRow({title: 'Average discharge'});
         const chargeRow = new Adw.ActionRow({title: 'Average charge'});
