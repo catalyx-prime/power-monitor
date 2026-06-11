@@ -96,5 +96,24 @@
       <description>Screen brightness percentage applied when plugged in to AC power.</description>
     </key>
 
+    <!-- Power profiles. The profile values are free-form strings (not an enum)
+         because the set of available profiles is reported at runtime by
+         power-profiles-daemon over DBus and varies by hardware. -->
+    <key name="power-profile-manage" type="b">
+      <default>false</default>
+      <summary>Auto-manage the system power profile</summary>
+      <description>When enabled, the extension sets the power-profiles-daemon profile based on the current power source.</description>
+    </key>
+    <key name="power-profile-on-battery" type="s">
+      <default>'balanced'</default>
+      <summary>Power profile on battery</summary>
+      <description>power-profiles-daemon profile applied when running on battery power.</description>
+    </key>
+    <key name="power-profile-on-ac" type="s">
+      <default>'performance'</default>
+      <summary>Power profile on AC power</summary>
+      <description>power-profiles-daemon profile applied when plugged in to AC power.</description>
+    </key>
+
   </schema>
 </schemalist>

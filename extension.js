@@ -856,6 +856,7 @@ export default class PowerMonitorExtension extends Extension {
 
         this._watchPowerSource();
         this._setupBrightnessControl();
+        this._setupPowerProfileControl();
 
         // At startup the laptop may already be plugged in, in which case the
         // UPower `on-battery` transition that normally triggers a settle re-read
@@ -882,6 +883,7 @@ export default class PowerMonitorExtension extends Extension {
             this._indicator.update();
             this._scheduleSettleUpdate();
             this._applyBrightness();
+            this._applyPowerProfile();
         });
     }
 
@@ -973,6 +975,57 @@ export default class PowerMonitorExtension extends Extension {
         }
     }
 
+    _setupPowerProfileControl() {
+        this._powerProfileSettingIds = [
+            this._settings.connect('changed::power-profile-manage',     () => this._applyPowerProfile()),
+            this._settings.connect('changed::power-profile-on-battery', () => this._applyPowerProfile()),
+            this._settings.connect('changed::power-profile-on-ac',      () => this._applyPowerProfile()),
+        ];
+        // Apply the configured profile for the current power source at startup.
+        this._applyPowerProfile();
+    }
+
+    _applyPowerProfile() {
+        if (!this._settings || !this._settings.get_boolean('power-profile-manage'))
+            return;
+
+        let onBattery = false;
+        if (this._upowerClient)
+            onBattery = this._upowerClient.on_battery;
+        else {
+            const m = readMetrics();
+            onBattery = m ? m.onBattery : false;
+        }
+
+        const profile = this._settings.get_string(
+            onBattery ? 'power-profile-on-battery' : 'power-profile-on-ac');
+        if (!profile)
+            return;
+
+        // Drive power-profiles-daemon by writing its ActiveProfile property over
+        // the system bus. The call is async (fire-and-forget) so it never blocks
+        // the shell; a failure (daemon absent, or the profile no longer exists on
+        // this hardware) is swallowed rather than escaping into enable() or a
+        // settings handler.
+        try {
+            Gio.DBus.system.call(
+                'net.hadess.PowerProfiles',
+                '/net/hadess/PowerProfiles',
+                'org.freedesktop.DBus.Properties',
+                'Set',
+                new GLib.Variant('(ssv)', [
+                    'net.hadess.PowerProfiles',
+                    'ActiveProfile',
+                    new GLib.Variant('s', profile),
+                ]),
+                null,
+                Gio.DBusCallFlags.NONE,
+                -1,
+                null,
+                null);
+        } catch (_e) {}
+    }
+
     // Creates the indicator and adds it to the configured panel box. Re-running
     // this (on a panel-position change) tears down the old indicator first, so
     // it effectively moves the indicator between the left/center/right boxes.
@@ -1035,6 +1088,12 @@ export default class PowerMonitorExtension extends Extension {
             for (const id of this._brightnessSettingIds)
                 this._settings.disconnect(id);
             this._brightnessSettingIds = null;
+        }
+
+        if (this._powerProfileSettingIds) {
+            for (const id of this._powerProfileSettingIds)
+                this._settings.disconnect(id);
+            this._powerProfileSettingIds = null;
         }
 
         if (this._settingsChangedId) {

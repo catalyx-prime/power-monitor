@@ -3,6 +3,7 @@
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
@@ -28,6 +29,53 @@ const DETAIL_SIZES = [
     {nick: 'medium', label: 'Medium (1.25x)'},
     {nick: 'large', label: 'Large (1.5x)'},
 ];
+
+// Friendly labels for the well-known power-profiles-daemon profiles. Anything
+// not listed falls back to a title-cased version of its nick.
+const POWER_PROFILE_LABELS = {
+    'power-saver': 'Power Saver',
+    'balanced': 'Balanced',
+    'performance': 'Performance',
+};
+
+// The standard profiles, used when power-profiles-daemon can't be reached so the
+// dropdowns still offer the usual choices instead of being empty.
+const FALLBACK_POWER_PROFILES = ['power-saver', 'balanced', 'performance'];
+
+function powerProfileLabel(nick) {
+    if (POWER_PROFILE_LABELS[nick])
+        return POWER_PROFILE_LABELS[nick];
+    return nick.split(/[-_]/)
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(' ');
+}
+
+// Ask power-profiles-daemon (over the system bus) which profiles this hardware
+// supports. The daemon reports them at runtime via the `Profiles` property — an
+// array of dicts each carrying a `Profile` nick. Falls back to the standard set
+// if the daemon is unavailable.
+function availablePowerProfiles() {
+    try {
+        const reply = Gio.DBus.system.call_sync(
+            'net.hadess.PowerProfiles',
+            '/net/hadess/PowerProfiles',
+            'org.freedesktop.DBus.Properties',
+            'Get',
+            new GLib.Variant('(ss)', ['net.hadess.PowerProfiles', 'Profiles']),
+            null,
+            Gio.DBusCallFlags.NONE,
+            -1,
+            null);
+        const profiles = reply.get_child_value(0).recursiveUnpack()
+            .map(p => p.Profile)
+            .filter(Boolean);
+        if (profiles.length)
+            return profiles;
+    } catch (_e) {
+        // power-profiles-daemon not installed/running; use the standard set.
+    }
+    return FALLBACK_POWER_PROFILES;
+}
 
 export default class PowerMonitorPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
@@ -184,6 +232,48 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
         handlers.push(settings.connect('changed::brightness-on-ac', () => {
             acSpinRow.value = settings.get_int('brightness-on-ac');
         }));
+
+        /* ---------------------- Power Profiles group --------------------- */
+
+        const profileGroup = new Adw.PreferencesGroup({
+            title: 'Power Profiles',
+            description: 'Automatically set the system power profile when switching power sources.',
+        });
+        page.add(profileGroup);
+
+        const profileManageRow = new Adw.SwitchRow({
+            title: 'Manage power profile',
+            subtitle: 'Apply the selected profile when plugging in or unplugging',
+        });
+        settings.bind('power-profile-manage', profileManageRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        profileGroup.add(profileManageRow);
+
+        const profiles = availablePowerProfiles();
+
+        const addProfileRow = (title, subtitle, key, fallbackNick) => {
+            const profileModel = new Gtk.StringList();
+            for (const nick of profiles)
+                profileModel.append(powerProfileLabel(nick));
+
+            const row = new Adw.ComboRow({title, subtitle, model: profileModel});
+            const stored = settings.get_string(key);
+            let idx = profiles.indexOf(stored);
+            if (idx < 0)
+                idx = profiles.indexOf(fallbackNick);
+            if (idx < 0)
+                idx = 0;
+            row.selected = idx;
+            settings.bind('power-profile-manage', row, 'sensitive', Gio.SettingsBindFlags.DEFAULT);
+            row.connect('notify::selected', () => {
+                settings.set_string(key, profiles[row.selected]);
+            });
+            profileGroup.add(row);
+        };
+
+        addProfileRow('On battery', 'Profile applied while running on battery power',
+            'power-profile-on-battery', 'balanced');
+        addProfileRow('On AC power', 'Profile applied while plugged in',
+            'power-profile-on-ac', 'performance');
 
         /* ------------------------ Averages group ------------------------- */
 

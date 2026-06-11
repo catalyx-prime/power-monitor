@@ -85,6 +85,17 @@ for syntax, then exercise the real shell after a re-login.
   controllable backlight, so always guard for it (`_applyBrightness()`). Don't call
   `osdWindowManager.show()` during `enable()` — it isn't ready that early and throws;
   `_setupBrightnessControl()` passes `showOsd=false` for the startup apply.
+- **Power-profile switching goes through power-profiles-daemon over DBus.**
+  `_applyPowerProfile()` writes the daemon's `ActiveProfile` property on the system
+  bus (`net.hadess.PowerProfiles` at `/net/hadess/PowerProfiles`), mirroring the
+  brightness path: a `*-manage` toggle plus `*-on-battery`/`*-on-ac` keys, applied on
+  every `notify::on-battery` and once at startup. Unlike brightness, the available
+  profiles are **not** a fixed enum — the daemon reports them at runtime (typically
+  `power-saver`/`balanced`/`performance`, but hardware-dependent), so the GSettings
+  keys are free-form strings and `prefs.js` populates the dropdowns from the daemon's
+  `Profiles` property (`availablePowerProfiles()`), falling back to the standard three
+  if the daemon is unreachable. The DBus write is async fire-and-forget and wrapped in
+  try/catch so a missing daemon or stale profile can't break `enable()`.
 - **The history chart is in-memory only.** `_history` is a rolling buffer (capped at
   `HISTORY_MAX`), not GSettings-backed, so it starts empty on every shell start and is
   never persisted to disk. It is owned by the long-lived *extension* object (assigned

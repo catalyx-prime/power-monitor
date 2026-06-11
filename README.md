@@ -16,8 +16,9 @@ and a **power-history chart** of recent readings. Values are formatted to one
 decimal place with a `W` suffix. The extension tracks a rolling average of each
 metric since the last reboot (or last manual reset).
 
-It can also **automatically set screen brightness** when you plug in or unplug,
-applying a configurable level for AC versus battery (see [Preferences](#preferences)).
+It can also **automatically set screen brightness** and the **system power
+profile** when you plug in or unplug, applying a configurable level/profile for
+AC versus battery (see [Preferences](#preferences)).
 
 > This extension targets **single-battery** machines (laptops). The first
 > battery reported under `/sys/class/power_supply/` is used.
@@ -122,6 +123,11 @@ The preferences window lets you:
 - **Manage brightness**: when enabled, the extension sets screen brightness from
   the configured **On battery** and **On AC power** levels (each 20–100%) every
   time the power source changes.
+- **Manage power profile**: when enabled, the extension sets the system power
+  profile (via `power-profiles-daemon`) from the configured **On battery** and
+  **On AC power** selections every time the power source changes. The dropdowns
+  list the profiles the daemon reports for your hardware (typically Power Saver,
+  Balanced, Performance); defaults are Balanced on battery and Performance on AC.
 - View the current **rolling averages** and sample count.
 - **Reset Averages** to clear the accumulated totals.
 
