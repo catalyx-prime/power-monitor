@@ -31,7 +31,6 @@ const METRICS = {
     charge: {icon: ICON_FILES.charge, label: 'Charge'},
 };
 
-const HISTORY_MAX = 1440; // 4 hrs at 10 s intervals
 // How often the in-memory average accumulators are flushed to GSettings. The
 // keys exist only so the separate prefs process can read the averages, so a few
 // seconds of lag there is fine and avoids a dconf write on every poll tick.
@@ -42,6 +41,9 @@ const CHART_RANGES = [
     {label: '1 hr',   ms: 60 * 60 * 1000},
     {label: '4 hr',   ms: 4 * 60 * 60 * 1000},
 ];
+// The history buffer is bounded by age, not sample count: keep samples within the
+// longest selectable range so the depth is independent of the refresh interval.
+const HISTORY_WINDOW_MS = Math.max(...CHART_RANGES.map(r => r.ms));
 
 /* ----------------------------- sysfs helpers ----------------------------- */
 
@@ -539,12 +541,16 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     }
 
     _pushHistory(metrics) {
+        const now = Date.now();
         this._history.push({
-            t: Date.now(),
+            t: now,
             discharge: metrics.discharge,
             charge: metrics.charge,
         });
-        if (this._history.length > HISTORY_MAX)
+        // Evict from the head while the oldest sample is past the age window.
+        // Samples are pushed in time order, so the front is always the oldest.
+        const cutoff = now - HISTORY_WINDOW_MS;
+        while (this._history.length && this._history[0].t < cutoff)
             this._history.shift();
     }
 
