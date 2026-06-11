@@ -195,7 +195,7 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             charge: {sum: 0, count: 0},
         };
         this._lastFlush = Date.now();
-        this._chartRange = 60 * 60 * 1000; // default: 1 hr
+        this._chartRange = 15 * 60 * 1000; // default: 15 min
         this._lastMetrics = null;
         this._repaintId = null;
         this._menuOpenId = null;
