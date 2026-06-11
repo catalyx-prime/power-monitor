@@ -1,7 +1,7 @@
 {
   "uuid": "power-monitor@local",
   "name": "Power Monitor",
-  "description": "Shows live battery power draw — in watts — directly in the top bar. Tracks discharge while on battery and charge rate while plugged in, switching automatically between the two. Rolling averages since last boot give you a sense of typical consumption over time, and a detail-pane chart plots recent power history. Optionally sets screen brightness automatically when switching between AC and battery. Configurable refresh interval, optional icon, and panel placement.",
+  "description": "Shows live battery power draw — in watts — directly in the top bar. Tracks discharge while on battery and charge rate while plugged in, switching automatically between the two. Rolling averages since last boot give you a sense of typical consumption over time, and a detail-pane chart plots recent power history. Optionally sets screen brightness and the system power profile automatically when switching between AC and battery. Configurable refresh interval, optional icon, and panel placement.",
   "shell-version": ["50"],
   "session-modes": ["user", "unlock-dialog"],
   "settings-schema": "org.gnome.shell.extensions.power-monitor",
