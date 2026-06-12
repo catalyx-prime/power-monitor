@@ -30,6 +30,22 @@ const DETAIL_SIZES = [
     {nick: 'large', label: 'Large (1.5x)'},
 ];
 
+// Detail panel placement. 'default' keeps the stock pill-anchored dropdown; the
+// rest pin the panel to a cell of a 3x3 grid over the work area. Values are
+// free-form strings (see the schema), so no enum to keep in sync.
+const DETAIL_PANEL_POSITIONS = [
+    {nick: 'default', label: 'Default'},
+    {nick: 'top-left', label: 'Top left'},
+    {nick: 'top-center', label: 'Top center'},
+    {nick: 'top-right', label: 'Top right'},
+    {nick: 'middle-left', label: 'Middle left'},
+    {nick: 'middle-center', label: 'Middle center'},
+    {nick: 'middle-right', label: 'Middle right'},
+    {nick: 'bottom-left', label: 'Bottom left'},
+    {nick: 'bottom-center', label: 'Bottom center'},
+    {nick: 'bottom-right', label: 'Bottom right'},
+];
+
 // Friendly labels for the well-known power-profiles-daemon profiles. Anything
 // not listed falls back to a title-cased version of its nick.
 const POWER_PROFILE_LABELS = {
@@ -143,7 +159,7 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
         panelGroup.add(colorModeRow);
 
         const iconRow = new Adw.SwitchRow({
-            title: 'Show metric icon',
+            title: 'Show battery icon',
             subtitle: 'Display the icon next to the value in the top bar',
         });
         settings.bind('panel-show-icon', iconRow, 'active',
@@ -166,6 +182,23 @@ export default class PowerMonitorPreferences extends ExtensionPreferences {
             settings.set_string('detail-size', DETAIL_SIZES[sizeRow.selected].nick);
         });
         panelGroup.add(sizeRow);
+
+        const detailPosModel = new Gtk.StringList();
+        for (const position of DETAIL_PANEL_POSITIONS)
+            detailPosModel.append(position.label);
+
+        const detailPosRow = new Adw.ComboRow({
+            title: 'Detail panel placement',
+            subtitle: 'Where the detail panel appears after clicking the pill',
+            model: detailPosModel,
+        });
+        const currentDetailPos = settings.get_string('detail-panel-position');
+        const detailPosIdx = DETAIL_PANEL_POSITIONS.findIndex(p => p.nick === currentDetailPos);
+        detailPosRow.selected = detailPosIdx >= 0 ? detailPosIdx : 0;
+        detailPosRow.connect('notify::selected', () => {
+            settings.set_string('detail-panel-position', DETAIL_PANEL_POSITIONS[detailPosRow.selected].nick);
+        });
+        panelGroup.add(detailPosRow);
 
         /* ------------------------- General group ------------------------- */
 

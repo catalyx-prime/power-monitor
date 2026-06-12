@@ -40,6 +40,16 @@
       <description>Whether the detail panel uses light, dark, or system-matching colors. Auto follows the system color-scheme preference.</description>
     </key>
 
+    <!-- Detail panel placement. Free-form string (not an enum) so the value set
+         stays easy to extend: 'default' keeps the stock pill-anchored dropdown,
+         any other value pins the panel to a cell of a 3x3 grid over the work
+         area (e.g. 'top-left', 'middle-center', 'bottom-right'). -->
+    <key name="detail-panel-position" type="s">
+      <default>'default'</default>
+      <summary>Detail panel placement</summary>
+      <description>Where the detail panel appears after clicking the panel pill: default (drops down from the pill), or pinned to a screen location — top-left, top-center, top-right, middle-left, middle-center, middle-right, bottom-left, bottom-center, or bottom-right.</description>
+    </key>
+
     <key name="panel-show-icon" type="b">
       <default>true</default>
       <summary>Show the metric icon in the panel</summary>

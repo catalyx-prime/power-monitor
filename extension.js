@@ -47,12 +47,16 @@ const HISTORY_WINDOW_MS = Math.max(...CHART_RANGES.map(r => r.ms));
 
 /* ----------------------------- sysfs helpers ----------------------------- */
 
+// Reused across the many per-poll sysfs reads instead of allocating a fresh
+// decoder each call.
+const _decoder = new TextDecoder();
+
 function readText(path) {
     try {
         const [ok, contents] = GLib.file_get_contents(path);
         if (!ok)
             return null;
-        return new TextDecoder().decode(contents).trim();
+        return _decoder.decode(contents).trim();
     } catch (_e) {
         return null;
     }
@@ -222,12 +226,15 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this._installMenuPositioning();
         this._applyDetailSize();
         this._applyColorMode();
+        this._applyDetailPanelPosition();
 
         // Rebuild the panel when the user toggles whether the icon is shown.
         this._panelChangedIds = [
             this._settings.connect('changed::panel-show-icon', () => this._rebuildPanel()),
             this._settings.connect('changed::detail-size', () => this._applyDetailSize()),
             this._settings.connect('changed::color-mode', () => this._applyColorMode()),
+            this._settings.connect('changed::detail-panel-position',
+                () => this._applyDetailPanelPosition()),
         ];
 
         if (this._ifaceSettings) {
@@ -276,12 +283,14 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     // update(), so the icon's gicon is swapped there rather than fixed here.
     _buildPanel() {
         if (this._settings.get_boolean('panel-show-icon')) {
+            this._panelIconFile = this._iconFileFor('discharge');
             this._panelIcon = this._buildIcon(
-                this._iconFileFor('discharge'), 'system-status-icon power-monitor-icon');
+                this._panelIconFile, 'system-status-icon power-monitor-icon');
             if (this._panelIcon)
                 this._panelBox.add_child(this._panelIcon);
         } else {
             this._panelIcon = null;
+            this._panelIconFile = null;
         }
 
         this._panelLabel = new St.Label({
@@ -325,8 +334,10 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
     _updateDetailIcons() {
         const key = this._lastActiveKey ?? 'discharge';
-        if (this._panelIcon)
-            this._panelIcon.gicon = this._gicon(this._iconFileFor(key));
+        if (this._panelIcon) {
+            this._panelIconFile = this._iconFileFor(key);
+            this._panelIcon.gicon = this._gicon(this._panelIconFile);
+        }
         const update = (icon, iconKey) => {
             if (icon)
                 icon.gicon = this._gicon(this._iconFileFor(iconKey));
@@ -338,11 +349,20 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     }
 
     // Returns a Gio.Icon for the given icon file, or null if it is missing.
+    // GIcons are immutable, so the result is memoized: the poll loop and the
+    // detail-icon refresh ask for the same handful of files repeatedly, and
+    // there's no point re-running the `file_test` stat and reallocating each
+    // time.
     _gicon(iconFile) {
+        this._giconCache ??= new Map();
+        if (this._giconCache.has(iconFile))
+            return this._giconCache.get(iconFile);
         const iconPath = GLib.build_filenamev([this._extension.path, 'icons', iconFile]);
-        if (!GLib.file_test(iconPath, GLib.FileTest.EXISTS))
-            return null;
-        return Gio.icon_new_for_string(iconPath);
+        const gicon = GLib.file_test(iconPath, GLib.FileTest.EXISTS)
+            ? Gio.icon_new_for_string(iconPath)
+            : null;
+        this._giconCache.set(iconFile, gicon);
+        return gicon;
     }
 
     // Returns an St.Icon for the given icon file, or null if it is missing.
@@ -377,6 +397,14 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         const originalReposition = boxPointer._reposition;
         boxPointer._reposition = function (allocationBox) {
             originalReposition.call(this, allocationBox);
+
+            // When the detail panel is pinned to a fixed screen location, ignore
+            // the pill-relative edge alignment below and place it on the grid.
+            const detailPos = indicator._settings.get_string('detail-panel-position');
+            if (detailPos !== 'default') {
+                indicator._repositionDetailPanel(this, detailPos, allocationBox);
+                return;
+            }
 
             // Only horizontal panel dropdowns (arrow on top/bottom) get edge
             // alignment; a side arrow would need vertical logic instead.
@@ -415,6 +443,53 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             arrowOrigin = Math.max(0, Math.min(arrowOrigin, boxWidth));
             this.setArrowOrigin(arrowOrigin);
         };
+    }
+
+    // Pin the detail panel (the menu's BoxPointer) to a cell of a 3x3 grid over
+    // the work area (the monitor minus the top bar), ignoring the pill. `pos` is
+    // a '<row>-<col>' key: top/middle/bottom aligns the panel's top/centre/bottom
+    // to the area's; left/center/right its left/centre/right edge. The stock
+    // _reposition (called just before us) has already populated `_workArea` and
+    // sized the box, so we only need to rewrite the origin — same parent-relative
+    // conversion the edge-alignment path uses.
+    _repositionDetailPanel(boxPointer, pos, allocationBox) {
+        const wa = boxPointer._workArea;
+        if (!wa)
+            return;
+
+        const boxWidth = allocationBox.get_width();
+        const boxHeight = allocationBox.get_height();
+        const [row, col] = pos.split('-');
+
+        let stageX = col === 'left'  ? wa.x
+                   : col === 'right' ? wa.x + wa.width - boxWidth
+                   :                   wa.x + (wa.width - boxWidth) / 2;
+        let stageY = row === 'top'    ? wa.y
+                   : row === 'bottom' ? wa.y + wa.height - boxHeight
+                   :                    wa.y + (wa.height - boxHeight) / 2;
+
+        // Keep the panel fully on the work area even if it is larger than it.
+        stageX = Math.max(wa.x, Math.min(stageX, wa.x + wa.width - boxWidth));
+        stageY = Math.max(wa.y, Math.min(stageY, wa.y + wa.height - boxHeight));
+
+        const [parentStageX, parentStageY] = boxPointer.get_parent().get_transformed_position();
+        allocationBox.set_origin(Math.round(stageX - parentStageX),
+            Math.round(stageY - parentStageY));
+    }
+
+    // Flatten the BoxPointer arrow when the panel is pinned (it no longer points
+    // at the pill) and force a relayout so a placement change takes effect at
+    // once, including while the menu is open.
+    _applyDetailPanelPosition() {
+        const boxPointer = this.menu._boxPointer;
+        if (!boxPointer)
+            return;
+        const pinned = this._settings.get_string('detail-panel-position') !== 'default';
+        if (pinned)
+            boxPointer.add_style_class_name('power-monitor-detail-pinned');
+        else
+            boxPointer.remove_style_class_name('power-monitor-detail-pinned');
+        boxPointer.queue_relayout();
     }
 
     _buildMenu() {
@@ -563,7 +638,15 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         const now = Date.now();
         const windowMs = this._chartRange;
         const cutoff = now - windowMs;
-        const samples = this._history.filter(s => s.t >= cutoff);
+        // Visible window. The buffer is time-ordered, so walk back from the end
+        // to the first in-window sample instead of allocating a filtered copy of
+        // — and scanning all of — the buffer on every repaint (most of it is
+        // older than the cutoff for the shorter ranges).
+        const hist = this._history;
+        let start = hist.length;
+        while (start > 0 && hist[start - 1].t >= cutoff)
+            start--;
+        const n = hist.length - start;
 
         // Layout constants
         const TM = 18; // top margin (y-axis max label)
@@ -582,7 +665,8 @@ class PowerMonitorIndicator extends PanelMenu.Button {
 
         // Auto-scale: find max of |discharge| and charge over visible window
         let maxVal = 0;
-        for (const s of samples) {
+        for (let i = start; i < hist.length; i++) {
+            const s = hist[i];
             if (s.charge > maxVal) maxVal = s.charge;
             const ad = Math.abs(s.discharge);
             if (ad > maxVal) maxVal = ad;
@@ -604,15 +688,17 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         cr.moveTo(pl, pt); cr.lineTo(pr, pt); cr.stroke();
         cr.moveTo(pl, pb); cr.lineTo(pr, pb); cr.stroke();
 
-        if (samples.length > 1) {
-            const x0 = toX(samples[0].t);
-            const xN = toX(samples[samples.length - 1].t);
+        if (n > 1) {
+            const first = hist[start];
+            const last = hist[hist.length - 1];
+            const x0 = toX(first.t);
+            const xN = toX(last.t);
 
             // Charge area — green fill above zero line
             cr.setSourceRGBA(0.18, 0.72, 0.27, 0.3);
             cr.moveTo(x0, cy);
-            for (const s of samples)
-                cr.lineTo(toX(s.t), toY(s.charge));
+            for (let i = start; i < hist.length; i++)
+                cr.lineTo(toX(hist[i].t), toY(hist[i].charge));
             cr.lineTo(xN, cy);
             cr.closePath();
             cr.fill();
@@ -620,16 +706,16 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             // Charge stroke
             cr.setSourceRGBA(0.2, 0.82, 0.32, 0.85);
             cr.setLineWidth(1.5);
-            cr.moveTo(toX(samples[0].t), toY(samples[0].charge));
-            for (let i = 1; i < samples.length; i++)
-                cr.lineTo(toX(samples[i].t), toY(samples[i].charge));
+            cr.moveTo(x0, toY(first.charge));
+            for (let i = start + 1; i < hist.length; i++)
+                cr.lineTo(toX(hist[i].t), toY(hist[i].charge));
             cr.stroke();
 
             // Discharge area — red fill below zero line
             cr.setSourceRGBA(0.82, 0.18, 0.18, 0.3);
             cr.moveTo(x0, cy);
-            for (const s of samples)
-                cr.lineTo(toX(s.t), toY(s.discharge));
+            for (let i = start; i < hist.length; i++)
+                cr.lineTo(toX(hist[i].t), toY(hist[i].discharge));
             cr.lineTo(xN, cy);
             cr.closePath();
             cr.fill();
@@ -637,9 +723,9 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             // Discharge stroke
             cr.setSourceRGBA(0.9, 0.25, 0.2, 0.85);
             cr.setLineWidth(1.5);
-            cr.moveTo(toX(samples[0].t), toY(samples[0].discharge));
-            for (let i = 1; i < samples.length; i++)
-                cr.lineTo(toX(samples[i].t), toY(samples[i].discharge));
+            cr.moveTo(x0, toY(first.discharge));
+            for (let i = start + 1; i < hist.length; i++)
+                cr.lineTo(toX(hist[i].t), toY(hist[i].discharge));
             cr.stroke();
         }
 
@@ -780,8 +866,15 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         const activeKey = metrics.onBattery ? 'discharge' : 'charge';
         this._lastActiveKey = activeKey;
         this._panelLabel.text = formatWatts(metrics[activeKey]);
-        if (this._panelIcon)
-            this._panelIcon.gicon = this._gicon(this._iconFileFor(activeKey));
+        // Only touch the gicon when the resolved icon file actually changes
+        // (the active metric flips). Reassigning an equivalent icon every tick
+        // would re-run a stat and churn the texture cache for no visible effect;
+        // color-scheme changes route through _updateDetailIcons instead.
+        const iconFile = this._iconFileFor(activeKey);
+        if (this._panelIcon && iconFile !== this._panelIconFile) {
+            this._panelIconFile = iconFile;
+            this._panelIcon.gicon = this._gicon(iconFile);
+        }
 
         this._dischargeItem.text = `Discharge: ${formatWatts(metrics.discharge)}`;
         this._chargeItem.text    = `Charge: ${formatWatts(metrics.charge)}`;

@@ -80,6 +80,13 @@
     icon-size: 30px;
 }
 
+/* When the detail panel is pinned to a fixed screen location (detail-panel-
+   position != default) the arrow no longer points at the pill, so flatten it
+   to zero rise. Toggled on the BoxPointer by _applyDetailPanelPosition. */
+.power-monitor-detail-pinned {
+    -arrow-rise: 0px;
+}
+
 /* ---- chart section ---- */
 
 .power-monitor-chart-item {
