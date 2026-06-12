@@ -711,8 +711,8 @@ class PowerMonitorIndicator extends PanelMenu.Button {
                 cr.lineTo(toX(hist[i].t), toY(hist[i].charge));
             cr.stroke();
 
-            // Discharge area — red fill below zero line
-            cr.setSourceRGBA(0.82, 0.18, 0.18, 0.3);
+            // Discharge area — blue fill below zero line (matches discharge icon)
+            cr.setSourceRGBA(0.35, 0.61, 0.99, 0.3);
             cr.moveTo(x0, cy);
             for (let i = start; i < hist.length; i++)
                 cr.lineTo(toX(hist[i].t), toY(hist[i].discharge));
@@ -721,7 +721,7 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             cr.fill();
 
             // Discharge stroke
-            cr.setSourceRGBA(0.9, 0.25, 0.2, 0.85);
+            cr.setSourceRGBA(0.35, 0.61, 0.99, 0.85);
             cr.setLineWidth(1.5);
             cr.moveTo(x0, toY(first.discharge));
             for (let i = start + 1; i < hist.length; i++)
