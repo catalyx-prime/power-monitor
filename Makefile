@@ -25,10 +25,12 @@ install: schemas
 	@echo "Restart GNOME Shell (X11: Alt+F2, r) or log out/in, then:"
 	@echo "  gnome-extensions enable $(UUID)"
 
-# Produce a distributable zip with the schema already compiled.
-pack: schemas
+# Produce a distributable zip. Ship the schema *source* only — EGO compiles
+# gschemas.compiled itself, and shipping the compiled artifact is flagged by
+# review (EGO-P-006), so exclude it from the bundle.
+pack:
 	rm -f "$(ZIP)"
-	zip -r "$(ZIP)" $(SRC) schemas icons
+	zip -r "$(ZIP)" $(SRC) schemas icons -x 'schemas/gschemas.compiled'
 	@echo "Created $(ZIP)"
 
 clean:

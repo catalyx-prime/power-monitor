@@ -51,19 +51,34 @@ const HISTORY_WINDOW_MS = Math.max(...CHART_RANGES.map(r => r.ms));
 // decoder each call.
 const _decoder = new TextDecoder();
 
+// Async sysfs/proc read: resolves to the file's trimmed text, or null if it
+// can't be read. Shell code must not block the main loop on synchronous file
+// IO (EGO-X-004), so every read of /sys or /proc goes through Gio's async API.
+// load_contents_finish() throws on error (e.g. a vanished device node); we
+// resolve null on any failure rather than rejecting, so callers stay simple and
+// never have to catch.
 function readText(path) {
-    try {
-        const [ok, contents] = GLib.file_get_contents(path);
-        if (!ok)
-            return null;
-        return _decoder.decode(contents).trim();
-    } catch (_e) {
-        return null;
-    }
+    return new Promise(resolve => {
+        let file;
+        try {
+            file = Gio.File.new_for_path(path);
+        } catch (_e) {
+            resolve(null);
+            return;
+        }
+        file.load_contents_async(null, (f, res) => {
+            try {
+                const [ok, contents] = f.load_contents_finish(res);
+                resolve(ok ? _decoder.decode(contents).trim() : null);
+            } catch (_e) {
+                resolve(null);
+            }
+        });
+    });
 }
 
-function readInt(path) {
-    const text = readText(path);
+async function readInt(path) {
+    const text = await readText(path);
     if (text === null)
         return null;
     const value = parseInt(text, 10);
@@ -72,7 +87,10 @@ function readInt(path) {
 
 // Returns the name of the first battery device, or null if none is present.
 // This extension targets single-battery machines, so the first battery wins.
-function findBattery() {
+// The directory enumeration here is synchronous, but it isn't on the per-poll
+// hot path — the result is cached in _batteryName and we only re-scan when the
+// cached node vanishes — so it doesn't warrant the async-iterator machinery.
+async function findBattery() {
     try {
         const dir = Gio.File.new_for_path(POWER_SUPPLY_PATH);
         const enumerator = dir.enumerate_children(
@@ -80,7 +98,7 @@ function findBattery() {
         let info;
         while ((info = enumerator.next_file(null)) !== null) {
             const name = info.get_name();
-            const type = readText(`${POWER_SUPPLY_PATH}/${name}/type`);
+            const type = await readText(`${POWER_SUPPLY_PATH}/${name}/type`);
             if (type === 'Battery') {
                 enumerator.close(null);
                 return name;
@@ -95,16 +113,16 @@ function findBattery() {
 
 // Returns the battery power flow magnitude in watts (>= 0), or null if it
 // cannot be determined.
-function batteryWatts(name) {
+async function batteryWatts(name) {
     const base = `${POWER_SUPPLY_PATH}/${name}`;
 
     // Preferred: power_now is already a power figure in microwatts.
-    let microWatts = readInt(`${base}/power_now`);
+    let microWatts = await readInt(`${base}/power_now`);
 
     // Fallback: derive power from current_now (µA) and voltage_now (µV).
     if (microWatts === null) {
-        const microAmps = readInt(`${base}/current_now`);
-        const microVolts = readInt(`${base}/voltage_now`);
+        const microAmps = await readInt(`${base}/current_now`);
+        const microVolts = await readInt(`${base}/voltage_now`);
         if (microAmps !== null && microVolts !== null)
             microWatts = (microAmps * microVolts) / 1e6;
     }
@@ -128,23 +146,25 @@ function batteryWatts(name) {
 // null), we re-scan once and retry.
 let _batteryName = null;
 
-function readMetrics() {
-    let name = _batteryName ?? (_batteryName = findBattery());
+async function readMetrics() {
+    if (_batteryName == null)
+        _batteryName = await findBattery();
+    let name = _batteryName;
     if (name === null)
         return null;
 
-    let status = readText(`${POWER_SUPPLY_PATH}/${name}/status`);
+    let status = await readText(`${POWER_SUPPLY_PATH}/${name}/status`);
     if (status === null) {
         // Cached device vanished (removed/renamed) — re-scan once and retry.
-        name = _batteryName = findBattery();
+        name = _batteryName = await findBattery();
         if (name === null)
             return null;
-        status = readText(`${POWER_SUPPLY_PATH}/${name}/status`);
+        status = await readText(`${POWER_SUPPLY_PATH}/${name}/status`);
     }
     status = status || 'Unknown';
     const onBattery = status === 'Discharging';
 
-    let watts = batteryWatts(name);
+    let watts = await batteryWatts(name);
     if (watts === null) {
         // No power figure available. On hardware without a `power_now` node we
         // derive watts from current_now/voltage_now, and a plugged-in battery
@@ -244,23 +264,32 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             });
         }
 
-        this.connect('destroy', () => {
-            // Persist any unflushed average samples before tearing down.
-            this._flushAccumulators();
-            for (const id of this._panelChangedIds)
-                this._settings.disconnect(id);
-            this._panelChangedIds = [];
-            if (this._ifaceSettings && this._ifaceColorId) {
-                this._ifaceSettings.disconnect(this._ifaceColorId);
-                this._ifaceColorId = null;
-            }
-            this._ifaceSettings = null;
-            if (this._menuOpenId) {
-                this.menu.disconnect(this._menuOpenId);
-                this._menuOpenId = null;
-            }
-            this._destroyChartContent();
-        });
+        this.connect('destroy', this._onDestroy.bind(this));
+    }
+
+    // All signal teardown lives here (not in an inline destroy closure) so it
+    // reads as an explicit, traceable disconnect path: the indicator is the
+    // thing destroyed in the extension's disable(), and disable() -> destroy ->
+    // _onDestroy() disconnects every handler connected during setup.
+    _onDestroy() {
+        // Mark torn-down so any in-flight async update/checkBoot that resumes
+        // after this point bails out instead of touching destroyed actors.
+        this._destroyed = true;
+        // Persist any unflushed average samples before tearing down.
+        this._flushAccumulators();
+        for (const id of this._panelChangedIds)
+            this._settings.disconnect(id);
+        this._panelChangedIds = [];
+        if (this._ifaceSettings && this._ifaceColorId) {
+            this._ifaceSettings.disconnect(this._ifaceColorId);
+            this._ifaceColorId = null;
+        }
+        this._ifaceSettings = null;
+        if (this._menuOpenId) {
+            this.menu.disconnect(this._menuOpenId);
+            this._menuOpenId = null;
+        }
+        this._destroyChartContent();
     }
 
     _isDark() {
@@ -531,7 +560,10 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             } else {
                 // Defer teardown until after the close animation so the chart
                 // doesn't vanish visually while the menu is still fading out.
-                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                // Tracked so _destroyChartContent() can cancel it if we're torn
+                // down before it fires (EGO-L-004).
+                this._chartDestroyId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    this._chartDestroyId = null;
                     this._destroyChartContent();
                     return GLib.SOURCE_REMOVE;
                 });
@@ -596,6 +628,10 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     }
 
     _destroyChartContent() {
+        if (this._chartDestroyId) {
+            GLib.Source.remove(this._chartDestroyId);
+            this._chartDestroyId = null;
+        }
         if (this._repaintId && this._chartArea) {
             this._chartArea.disconnect(this._repaintId);
             this._repaintId = null;
@@ -785,8 +821,10 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     /* ------------------------- averages handling ------------------------- */
 
     // Reset averages whenever the machine has rebooted since the last sample.
-    checkBoot() {
-        const bootId = readText('/proc/sys/kernel/random/boot_id') || '';
+    async checkBoot() {
+        const bootId = await readText('/proc/sys/kernel/random/boot_id') || '';
+        if (this._destroyed)
+            return;
         if (this._settings.get_string('boot-id') !== bootId) {
             this.resetAverages();
             this._settings.set_string('boot-id', bootId);
@@ -843,7 +881,25 @@ class PowerMonitorIndicator extends PanelMenu.Button {
     /* ------------------------------ refresh ------------------------------ */
 
     update() {
-        const metrics = readMetrics();
+        // readMetrics() is async now (sysfs reads run off the main loop). Guard
+        // against overlapping refreshes: if a previous update is still awaiting
+        // its reads, skip this tick rather than double-counting into the
+        // accumulators and history buffer. Returns the in-flight promise so any
+        // caller that wants to can await it; all current callers fire-and-forget.
+        if (this._updating)
+            return Promise.resolve();
+        this._updating = true;
+        return this._doUpdate().finally(() => {
+            this._updating = false;
+        });
+    }
+
+    async _doUpdate() {
+        const metrics = await readMetrics();
+        // Bail if we were disabled/destroyed while awaiting the sysfs reads —
+        // the panel actors and menu items below would be finalized.
+        if (this._destroyed)
+            return;
 
         if (metrics === null) {
             this._panelLabel.text = 'n/a';
@@ -1024,7 +1080,7 @@ export default class PowerMonitorExtension extends Extension {
         this._applyBrightness(false);
     }
 
-    _applyBrightness(showOsd = true) {
+    async _applyBrightness(showOsd = true) {
         if (!this._settings || !this._settings.get_boolean('brightness-manage'))
             return;
 
@@ -1032,9 +1088,12 @@ export default class PowerMonitorExtension extends Extension {
         if (this._upowerClient)
             onBattery = this._upowerClient.on_battery;
         else {
-            const m = readMetrics();
+            const m = await readMetrics();
             onBattery = m ? m.onBattery : false;
         }
+        // disable() may have nulled _settings while we awaited the read.
+        if (!this._settings)
+            return;
 
         const pct = this._settings.get_int(
             onBattery ? 'brightness-on-battery' : 'brightness-on-ac');
@@ -1078,7 +1137,7 @@ export default class PowerMonitorExtension extends Extension {
         this._applyPowerProfile();
     }
 
-    _applyPowerProfile() {
+    async _applyPowerProfile() {
         if (!this._settings || !this._settings.get_boolean('power-profile-manage'))
             return;
 
@@ -1086,9 +1145,12 @@ export default class PowerMonitorExtension extends Extension {
         if (this._upowerClient)
             onBattery = this._upowerClient.on_battery;
         else {
-            const m = readMetrics();
+            const m = await readMetrics();
             onBattery = m ? m.onBattery : false;
         }
+        // disable() may have nulled _settings while we awaited the read.
+        if (!this._settings)
+            return;
 
         const profile = this._settings.get_string(
             onBattery ? 'power-profile-on-battery' : 'power-profile-on-ac');
@@ -1174,6 +1236,12 @@ export default class PowerMonitorExtension extends Extension {
     }
 
     disable() {
+        // This extension declares the `unlock-dialog` session mode so it keeps
+        // running on the lock screen: the power-history chart polls continuously,
+        // and disabling on lock would leave a flat-line gap that reads as a
+        // phantom drift. Because it stays enabled there, disable() only runs on a
+        // real removal/screen-lock-exit-to-disable, so it must still tear down
+        // every timeout, signal, and the indicator below.
         this._stopPolling();
         this._unwatchPowerSource();
 
