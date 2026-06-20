@@ -500,18 +500,18 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         this._addHeader('Current:');
-        ({label: this._dischargeItem, icon: this._dischargeIcon} =
-            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
         ({label: this._chargeItem, icon: this._chargeIcon} =
             this._buildDetailItem(this._iconFileFor('charge'), 'Charge: –'));
+        ({label: this._dischargeItem, icon: this._dischargeIcon} =
+            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         this._addHeader('Averages:');
-        ({label: this._avgDischargeItem, icon: this._avgDischargeIcon} =
-            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
         ({label: this._avgChargeItem, icon: this._avgChargeIcon} =
             this._buildDetailItem(this._iconFileFor('charge'), 'Charge: –'));
+        ({label: this._avgDischargeItem, icon: this._avgDischargeIcon} =
+            this._buildDetailItem(this._iconFileFor('discharge'), 'Discharge: –'));
 
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
