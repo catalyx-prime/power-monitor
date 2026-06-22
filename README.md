@@ -84,7 +84,7 @@ gnome-extensions enable power-monitor@local
 
 ```sh
 make pack
-gnome-extensions install --force power-monitor@local.zip
+gnome-extensions install --force power-monitor-v1.zip
 ```
 
 Then restart GNOME Shell and enable as above.
@@ -116,9 +116,14 @@ The preferences window lets you:
 
 - Choose the **panel placement**: left, center, or right area of the top bar
   (default right).
+- Choose the **color mode**: auto, light, or dark for the detail panel and icons.
+  Auto follows the system color-scheme preference (default auto).
 - Toggle **show metric icon** to display or hide the icon next to the value.
 - Choose the **detail panel size**: original, medium (1.25x), or large (1.5x)
   (default original).
+- Choose the **detail panel placement**: default (drops down from the panel pill)
+  or pinned to a fixed screen location — one of the nine cells of a 3x3 grid over
+  the work area, e.g. top-left, middle-center, bottom-right (default default).
 - Choose the **refresh interval**: 5, 10, 15, 20, 25, or 30 seconds (default 10).
 - **Manage brightness**: when enabled, the extension sets screen brightness from
   the configured **On battery** and **On AC power** levels (each 20–100%) every
@@ -140,7 +145,7 @@ via the kernel `boot_id`).
 | Target    | Action                                                            |
 |-----------|-------------------------------------------------------------------|
 | `install` | Compile schema and copy into the user extensions directory.       |
-| `pack`    | Produce `power-monitor@local.zip` for distribution.               |
+| `pack`    | Produce `power-monitor-v1.zip` for distribution.                  |
 | `schemas` | Compile the GSettings schema with `glib-compile-schemas`.         |
 | `clean`   | Remove the zip and the compiled schema.                           |
 
