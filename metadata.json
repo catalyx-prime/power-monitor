@@ -1,7 +1,7 @@
 {
   "uuid": "power-monitor@local",
   "name": "Power Monitor",
-  "description": "Shows live battery power draw — in watts — directly in the top bar. Tracks discharge while on battery and charge rate while plugged in, switching automatically between the two. Rolling averages since last boot give you a sense of typical consumption over time, and a detail-pane chart plots recent power history. Optionally sets screen brightness and the system power profile automatically when switching between AC and battery. Configurable refresh interval, optional icon, panel placement, light/dark/auto color mode, and detail-panel size and on-screen placement.",
+  "description": "See exactly how much power your laptop is using, live in the top bar.\n\nPower Monitor reads battery wattage straight from the kernel and switches automatically between discharge (on battery) and charge (plugged in), so the number in your panel is always the one that matters.\n\nWhat you get:\n• Live wattage in the panel, refreshed on an interval you choose\n• Automatic discharge / charge switching, no clicking required\n• Rolling averages since last boot, with a one-click reset\n• A power-history chart (15 min, 1 hr, 4 hr) in the detail panel\n• Optional automatic screen brightness per power source\n• Optional automatic power-profile switching via power-profiles-daemon\n• Your call on placement, color mode, icon, and detail-panel size\n\nBuilt for single-battery laptops running GNOME Shell 50.",
   "shell-version": ["50"],
   "session-modes": ["user", "unlock-dialog"],
   "settings-schema": "org.gnome.shell.extensions.power-monitor",
