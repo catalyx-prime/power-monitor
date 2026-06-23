@@ -6,6 +6,14 @@
     border-color: transparent;
 }
 
+/* Restore the panel highlight on hover/focus. The transparent base rules above
+   (including :active/:checked) also match while hovered; at equal specificity
+   the later rule wins, so this must stay after them. */
+.power-monitor-panel-button:hover,
+.power-monitor-panel-button:focus {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
 /* spacing puts a small gap between the icon and the metric label; with the
    icon hidden there's a single child, so the label still sits flush. */
 .power-monitor-box {
