@@ -234,7 +234,8 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             this._ifaceSettings = null;
         }
 
-        // Drop the rounded "pill" background the panel button normally draws.
+        // Drop the rounded "pill" background the panel button normally draws,
+        // except on :hover/:focus so mousing over still shows the highlight.
         this.add_style_class_name('power-monitor-panel-button');
 
         this._panelBox = new St.BoxLayout({
