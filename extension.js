@@ -188,6 +188,9 @@ async function readMetrics() {
         // means the battery is powering the system (unplugged); every other
         // status (Charging / Full / Not charging / Unknown) means AC is present.
         onBattery,
+        // Whether the battery is actively charging. Used to gate the charge
+        // average so idle-plugged ticks (Full / Not charging) don't dilute it.
+        charging: status === 'Charging',
     };
 }
 
@@ -222,7 +225,6 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this._chartRange = 15 * 60 * 1000; // default: 15 min
         this._lastMetrics = null;
         this._repaintId = null;
-        this._menuOpenId = null;
         this._chartArea = null;
         this._rangeBtns = [];
 
@@ -249,59 +251,50 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         this._applyDetailPanelPosition();
 
         // Rebuild the panel when the user toggles whether the icon is shown.
-        this._panelChangedIds = [
-            this._settings.connect('changed::panel-show-icon', () => this._rebuildPanel()),
-            this._settings.connect('changed::detail-size', () => this._applyDetailSize()),
-            this._settings.connect('changed::color-mode', () => this._applyColorMode()),
-            this._settings.connect('changed::detail-panel-position',
-                () => this._applyDetailPanelPosition()),
-        ];
+        // connectObject scopes every handler to `this`, so destroy() drops them
+        // all with a single disconnectObject(this) — no per-signal id tracking.
+        this._settings.connectObject(
+            'changed::panel-show-icon', () => this._rebuildPanel(),
+            'changed::detail-size', () => this._applyDetailSize(),
+            'changed::color-mode', () => this._applyColorMode(),
+            'changed::detail-panel-position', () => this._applyDetailPanelPosition(),
+            this);
 
         if (this._ifaceSettings) {
-            this._ifaceColorId = this._ifaceSettings.connect('changed::color-scheme', () => {
+            this._ifaceSettings.connectObject('changed::color-scheme', () => {
                 if (this._settings.get_string('color-mode') === 'auto')
                     this._applyColorMode();
-            });
+            }, this);
         }
-
-        this.connect('destroy', this._onDestroy.bind(this));
     }
 
-    // All signal teardown lives here (not in an inline destroy closure) so it
-    // reads as an explicit, traceable disconnect path: the indicator is the
-    // thing destroyed in the extension's disable(), and disable() -> destroy ->
-    // _onDestroy() disconnects every handler connected during setup.
-    _onDestroy() {
+    // Override destroy() so teardown runs whenever the actor is destroyed — the
+    // extension's disable() calls indicator.destroy(). Every signal is wired
+    // with connectObject(..., this), so disconnectObject(this) drops them all;
+    // chain up to the base PanelMenu.Button.destroy() last.
+    destroy() {
         // Mark torn-down so any in-flight async update/checkBoot that resumes
         // after this point bails out instead of touching destroyed actors.
         this._destroyed = true;
         // Persist any unflushed average samples before tearing down.
         this._flushAccumulators();
-        for (const id of this._panelChangedIds)
-            this._settings.disconnect(id);
-        this._panelChangedIds = [];
-        if (this._ifaceSettings && this._ifaceColorId) {
-            this._ifaceSettings.disconnect(this._ifaceColorId);
-            this._ifaceColorId = null;
-        }
+        this._settings.disconnectObject(this);
+        if (this._ifaceSettings)
+            this._ifaceSettings.disconnectObject(this);
         this._ifaceSettings = null;
-        if (this._menuOpenId) {
-            this.menu.disconnect(this._menuOpenId);
-            this._menuOpenId = null;
-        }
+        this.menu.disconnectObject(this);
         this._destroyChartContent();
+        super.destroy();
     }
 
     _isDark() {
         const mode = this._settings.get_string('color-mode');
         if (mode === 'dark') return true;
         if (mode === 'light') return false;
-        try {
-            return !this._ifaceSettings ||
-                this._ifaceSettings.get_string('color-scheme') !== 'prefer-light';
-        } catch (_e) {
-            return true;
-        }
+        // 'auto' — follow the shell's own variant. getStyleVariant() maps the
+        // system color-scheme to 'light'/'dark', defaulting to dark for anything
+        // but an explicit light preference (the mapping our icon set expects).
+        return Main.getStyleVariant() === 'dark';
     }
 
     _iconFileFor(key) {
@@ -554,7 +547,7 @@ class PowerMonitorIndicator extends PanelMenu.Button {
         prefsItem.connect('activate', () => this._extension.openPreferences());
         this.menu.addMenuItem(prefsItem);
 
-        this._menuOpenId = this.menu.connect('open-state-changed', (menu, isOpen) => {
+        this.menu.connectObject('open-state-changed', (menu, isOpen) => {
             if (isOpen) {
                 this._buildChartContent();
             } else {
@@ -568,7 +561,7 @@ class PowerMonitorIndicator extends PanelMenu.Button {
                     return GLib.SOURCE_REMOVE;
                 });
             }
-        });
+        }, this);
     }
 
     /* -------------------------- chart section ---------------------------- */
@@ -910,8 +903,14 @@ class PowerMonitorIndicator extends PanelMenu.Button {
             return;
         }
 
-        this._accumulate('discharge', metrics.discharge);
-        this._accumulate('charge', metrics.charge);
+        // Only fold a metric into its running average while that metric is the
+        // active one. Accumulating the inactive metric's forced-0 every tick
+        // (discharge while plugged in, charge while idle/full) drags the average
+        // toward zero — the average must be over active samples, not all polls.
+        if (metrics.onBattery)
+            this._accumulate('discharge', metrics.discharge);
+        if (metrics.charging)
+            this._accumulate('charge', metrics.charge);
         if (Date.now() - this._lastFlush >= ACCUM_FLUSH_MS)
             this._flushAccumulators();
 
@@ -986,22 +985,25 @@ export default class PowerMonitorExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
 
-        // The chart history buffer is owned here, not by the indicator, so it
-        // outlives the disable()/enable() cycle that GNOME Shell triggers on
-        // screen lock (and any other re-enable). It is only ever empty on a true
-        // shell (re)start, which creates a fresh extension object. Initialize it
-        // once; never clobber an existing buffer on re-enable.
-        this._history ??= [];
+        // Rolling in-memory buffer backing the detail-pane chart. Created here
+        // and dropped in disable() (per EGO teardown rules); never persisted, so
+        // the chart simply starts empty after a real disable/enable. The lock
+        // screen does NOT clear it — metadata.json declares the `unlock-dialog`
+        // session mode, so the extension stays enabled (no disable()) while the
+        // screensaver is up, keeping the chart continuous. Panel-position changes
+        // also keep it: they call _addIndicator() directly, not disable().
+        this._history = [];
 
         this._addIndicator();
 
-        // Restart the polling loop whenever the interval setting changes.
-        this._settingsChangedId = this._settings.connect(
-            'changed::refresh-interval', () => this._startPolling());
-
-        // Re-place the indicator when the user moves it between panel boxes.
-        this._positionChangedId = this._settings.connect(
-            'changed::panel-position', () => this._addIndicator());
+        // Restart the polling loop when the interval changes, and re-place the
+        // indicator when the user moves it between panel boxes. connectObject
+        // scopes both to this extension so disable() drops them with one
+        // disconnectObject(this).
+        this._settings.connectObject(
+            'changed::refresh-interval', () => this._startPolling(),
+            'changed::panel-position', () => this._addIndicator(),
+            this);
 
         this._watchPowerSource();
         this._setupBrightnessControl();
@@ -1028,12 +1030,12 @@ export default class PowerMonitorExtension extends Extension {
             return;
         }
 
-        this._onBatteryId = this._upowerClient.connect('notify::on-battery', () => {
+        this._upowerClient.connectObject('notify::on-battery', () => {
             this._indicator.update();
             this._scheduleSettleUpdate();
             this._applyBrightness();
             this._applyPowerProfile();
-        });
+        }, this);
     }
 
     // Re-read once more after a short delay, to catch a value that the battery's
@@ -1060,19 +1062,17 @@ export default class PowerMonitorExtension extends Extension {
     _unwatchPowerSource() {
         this._clearSettleTimeout();
         if (this._upowerClient) {
-            if (this._onBatteryId)
-                this._upowerClient.disconnect(this._onBatteryId);
-            this._onBatteryId = null;
+            this._upowerClient.disconnectObject(this);
             this._upowerClient = null;
         }
     }
 
     _setupBrightnessControl() {
-        this._brightnessSettingIds = [
-            this._settings.connect('changed::brightness-manage',     () => this._applyBrightness()),
-            this._settings.connect('changed::brightness-on-battery', () => this._applyBrightness()),
-            this._settings.connect('changed::brightness-on-ac',      () => this._applyBrightness()),
-        ];
+        this._settings.connectObject(
+            'changed::brightness-manage',     () => this._applyBrightness(),
+            'changed::brightness-on-battery', () => this._applyBrightness(),
+            'changed::brightness-on-ac',      () => this._applyBrightness(),
+            this);
         // Apply the configured level at startup, but without the OSD popup: the
         // osdWindowManager isn't ready this early in enable(), and calling
         // show() here throws — which would propagate out of enable() and put the
@@ -1128,11 +1128,11 @@ export default class PowerMonitorExtension extends Extension {
     }
 
     _setupPowerProfileControl() {
-        this._powerProfileSettingIds = [
-            this._settings.connect('changed::power-profile-manage',     () => this._applyPowerProfile()),
-            this._settings.connect('changed::power-profile-on-battery', () => this._applyPowerProfile()),
-            this._settings.connect('changed::power-profile-on-ac',      () => this._applyPowerProfile()),
-        ];
+        this._settings.connectObject(
+            'changed::power-profile-manage',     () => this._applyPowerProfile(),
+            'changed::power-profile-on-battery', () => this._applyPowerProfile(),
+            'changed::power-profile-on-ac',      () => this._applyPowerProfile(),
+            this);
         // Apply the configured profile for the current power source at startup.
         this._applyPowerProfile();
     }
@@ -1245,31 +1245,19 @@ export default class PowerMonitorExtension extends Extension {
         this._stopPolling();
         this._unwatchPowerSource();
 
-        if (this._brightnessSettingIds) {
-            for (const id of this._brightnessSettingIds)
-                this._settings.disconnect(id);
-            this._brightnessSettingIds = null;
-        }
-
-        if (this._powerProfileSettingIds) {
-            for (const id of this._powerProfileSettingIds)
-                this._settings.disconnect(id);
-            this._powerProfileSettingIds = null;
-        }
-
-        if (this._settingsChangedId) {
-            this._settings.disconnect(this._settingsChangedId);
-            this._settingsChangedId = null;
-        }
-        if (this._positionChangedId) {
-            this._settings.disconnect(this._positionChangedId);
-            this._positionChangedId = null;
-        }
-        this._settings = null;
-
+        // The indicator's own destroy() flushes accumulators and disconnects its
+        // signals; tear it down before dropping our settings handle.
         if (this._indicator) {
             this._indicator.destroy();
             this._indicator = null;
         }
+
+        // Every settings handler (interval/position, brightness, power-profile)
+        // was wired with connectObject(..., this), so one call drops them all.
+        this._settings.disconnectObject(this);
+        this._settings = null;
+
+        // Drop the in-memory chart buffer; it is rebuilt fresh on next enable().
+        this._history = null;
     }
 }

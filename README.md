@@ -16,6 +16,13 @@ and a **power-history chart** of recent readings. Values are formatted to one
 decimal place with a `W` suffix. The extension tracks a rolling average of each
 metric since the last reboot (or last manual reset).
 
+Each average is taken over **only the samples where that metric was active** —
+the discharge average over ticks spent on battery, the charge average over ticks
+spent actively charging. Idle states (plugged in but full, or `Not charging`)
+don't contribute `0 W` samples that would drag the averages down. As a result
+the figures read as "average power *while discharging*" / "*while charging*",
+not a duty-cycle average over wall-clock time.
+
 It can also **automatically set screen brightness** and the **system power
 profile** when you plug in or unplug, applying a configurable level/profile for
 AC versus battery (see [Preferences](#preferences)).
@@ -133,7 +140,9 @@ The preferences window lets you:
   **On AC power** selections every time the power source changes. The dropdowns
   list the profiles the daemon reports for your hardware (typically Power Saver,
   Balanced, Performance); defaults are Balanced on battery and Performance on AC.
-- View the current **rolling averages** and sample count.
+- View the current **rolling averages** and sample count. Each average covers
+  only the samples taken while that metric was active (see [the metrics
+  overview](#power-monitor)).
 - **Reset Averages** to clear the accumulated totals.
 
 Averages are stored via GSettings, so they survive opening and closing the

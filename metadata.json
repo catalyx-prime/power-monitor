@@ -6,5 +6,5 @@
   "session-modes": ["user", "unlock-dialog"],
   "settings-schema": "org.gnome.shell.extensions.power-monitor",
   "url": "https://github.com/catalyx-prime/power-monitor",
-  "version": 1
+  "version": 3
 }

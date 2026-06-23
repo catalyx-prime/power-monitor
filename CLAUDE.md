@@ -73,9 +73,17 @@ for syntax, then exercise the real shell after a re-login.
   (or `make install`). New keys must also be wired into both `extension.js` and
   `prefs.js`. If you add an enum/range, keep `INTERVALS` in `prefs.js` and the schema
   `<range>` in sync.
-- **Clean up in `disable()`.** Every `GLib.timeout_add*`, signal `connect`, and the
+- **Clean up in `disable()`.** Every `GLib.timeout_add*`, signal connection, and the
   indicator itself must be torn down — see `_stopPolling()` / `disable()`. Leaking a
   timeout or signal handler across enable/disable cycles is the classic extension bug.
+  Signals are wired with `connectObject(..., this)` (the GNOME signal-tracker helper,
+  available on both GObjects like `Gio.Settings`/`UPowerGlib.Client` and Signals-mixin
+  objects like `this.menu`), so teardown is a single `disconnectObject(this)` per
+  source instead of tracking handler ids — `disable()` calls it on `_settings`/
+  `_upowerClient`, and the indicator's `destroy()` override calls it on its own
+  `_settings`/`_ifaceSettings`/`menu` before chaining `super.destroy()`. EGO requires
+  *everything* released on `disable()`; don't stash state on the extension object to
+  survive the next `enable()` — if something must persist, put it in GSettings.
 - **Brightness goes through `Main.brightnessManager.globalScale`.** GNOME 50 removed
   the old `org.gnome.SettingsDaemon.Power.Screen` DBus interface and moved brightness
   into gnome-shell/mutter. `globalScale` is the in-process object the Quick Settings
@@ -98,15 +106,17 @@ for syntax, then exercise the real shell after a re-login.
   try/catch so a missing daemon or stale profile can't break `enable()`.
 - **The history chart is in-memory only.** `_history` is a rolling buffer (capped at
   `HISTORY_MAX`), not GSettings-backed, so it starts empty on every shell start and is
-  never persisted to disk. It is owned by the long-lived *extension* object (assigned
-  in `enable()` with `??=`, shared by reference into the indicator), **not** the
-  indicator, so it survives any `disable()`/`enable()` cycle (e.g. a panel-position
-  change) without dropping the buffer. `metadata.json` declares the `unlock-dialog`
-  session mode so the extension stays *enabled* on the lock screen and keeps polling —
-  without it the lock screen switches session mode and disables the extension, leaving
-  a flat-line gap in the chart (a straight `lineTo` bridging the pre-lock and
-  post-lock samples) that reads as a slow phantom drift. A true *suspend* still leaves
-  a gap (nothing runs while suspended). The chart is rebuilt fresh on each menu open
+  never persisted to disk. The *extension* object owns it (created as `[]` in
+  `enable()`, shared by reference into the indicator) and **drops it (`= null`) in
+  `disable()`** — EGO requires all state released on disable, so it is *not* carried
+  across a real disable/enable; the chart just starts empty afterward. That loss is
+  invisible in practice: `metadata.json` declares the `unlock-dialog` session mode so
+  the extension stays *enabled* on the lock screen (no `disable()` — without it the
+  lock screen switches session mode and disables the extension, leaving a flat-line
+  gap, a straight `lineTo` bridging pre-lock and post-lock samples, that reads as a
+  slow phantom drift), and a panel-position change re-runs `_addIndicator()` directly
+  rather than `disable()`/`enable()`, so neither path crosses a `disable()`. A true
+  *suspend* still leaves a gap (nothing runs while suspended). The chart is rebuilt fresh on each menu open
   and only repaints while the menu is open — see `_buildChartContent()` /
   `_destroyChartContent()`.
 - **GNOME version compatibility.** Use current GJS/St/Clutter idioms and check what
