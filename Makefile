@@ -1,7 +1,9 @@
 UUID        = power-monitor@local
 EXT_DIR     = $(HOME)/.local/share/gnome-shell/extensions
 INSTALL_DIR = $(EXT_DIR)/$(UUID)
-ZIP         = power-monitor-v1.zip
+# Track the version declared in metadata.json so the zip name never drifts.
+VERSION     = $(shell sed -n 's/.*"version"[[:space:]]*:[[:space:]]*\([0-9]*\).*/\1/p' metadata.json)
+ZIP         = power-monitor-v$(VERSION).zip
 
 # Files shipped with the extension (icons/ and schemas/ handled separately).
 SRC = extension.js prefs.js metadata.json stylesheet.css

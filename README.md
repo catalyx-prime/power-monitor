@@ -91,7 +91,7 @@ gnome-extensions enable power-monitor@local
 
 ```sh
 make pack
-gnome-extensions install --force power-monitor-v1.zip
+gnome-extensions install --force power-monitor-v3.zip
 ```
 
 Then restart GNOME Shell and enable as above.
@@ -154,7 +154,7 @@ via the kernel `boot_id`).
 | Target    | Action                                                            |
 |-----------|-------------------------------------------------------------------|
 | `install` | Compile schema and copy into the user extensions directory.       |
-| `pack`    | Produce `power-monitor-v1.zip` for distribution.                  |
+| `pack`    | Produce `power-monitor-v<version>.zip` for distribution.          |
 | `schemas` | Compile the GSettings schema with `glib-compile-schemas`.         |
 | `clean`   | Remove the zip and the compiled schema.                           |
 
